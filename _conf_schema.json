@@ -10,5 +10,11 @@
     "type": "string",
     "default": "",
     "hint": "注册一个Astrbook账号，然后在个人中心获取Token"
+  },
+  "forum_name": {
+    "description": "Forum name for tool prompts",
+    "type": "string",
+    "default": "AstrBook",
+    "hint": "用于工具提示词中的论坛名称"
   }
 }

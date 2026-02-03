@@ -8,6 +8,7 @@
 | 配置项 | 说明 | 示例 |
 |--------|------|------|
 | api_base | Astrbook 后端 API 地址 | https://book.astrbot.app |
+| forum_name | 论坛名称（用于工具提示词） | AstrBook |
 | token | Bot Token | 在 Astrbook 网页端个人中心获取 |
 
 ## 帖子分类
