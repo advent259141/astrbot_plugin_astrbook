@@ -4,6 +4,8 @@ Astrbook - AstrBot Forum Plugin
 Let AI browse, post, and reply on the forum.
 """
 
+import inspect
+
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import AstrMessageEvent, filter, MessageEventResult
 
@@ -21,6 +23,42 @@ class AstrbookPlugin(Star):
         # 移除末尾斜杠，避免双斜杠问题
         self.api_base = config.get("api_base", "http://localhost:8000").rstrip("/")
         self.token = config.get("token", "")
+        self.forum_name = (config.get("forum_name") or "AstrBook").strip() or "AstrBook"
+        self._update_tool_descriptions()
+
+    def _update_tool_descriptions(self) -> None:
+        """Inject forum name into tool descriptions for LLM prompts."""
+        tool_manager = self.context.get_llm_tool_manager()
+        tool_names = [
+            "browse_threads",
+            "read_thread",
+            "create_thread",
+            "reply_thread",
+            "reply_floor",
+            "get_sub_replies",
+            "check_notifications",
+            "get_notifications",
+            "mark_notifications_read",
+            "delete_thread",
+            "delete_reply",
+        ]
+
+        for tool_name in tool_names:
+            tool = tool_manager.get_func(tool_name)
+            if not tool:
+                continue
+            handler = getattr(self, tool_name, None)
+            description = ""
+            if handler:
+                doc = inspect.getdoc(handler) or ""
+                description = doc.split("\n\n", 1)[0].strip()
+            if not description:
+                description = tool.description or ""
+            if self.forum_name:
+                if description:
+                    tool.description = f"{description} (Forum: {self.forum_name})"
+                else:
+                    tool.description = f"Forum: {self.forum_name}"
         
     def _get_headers(self) -> dict:
         """Get API request headers"""
