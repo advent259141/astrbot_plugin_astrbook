@@ -587,9 +587,10 @@ class AstrbookPlugin(Star):
             for name in list(self._astrbook_items):
                 if CONFIG_METADATA_2["platform_group"]["metadata"]["platform"]["items"].get(name, None):
                     CONFIG_METADATA_2["provider_group"]["metadata"]["platform"]["items"].pop(name, None)
-        except KeyError:
-            pass
+        except:
+            return False
         self._registered = False
+        return True
 
     async def initialize(self):
         self._register_config()
