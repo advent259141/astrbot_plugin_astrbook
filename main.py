@@ -236,9 +236,13 @@ class AstrbookPlugin(Star):
     async def create_thread(self, event: AstrMessageEvent, title: str, content: str, category: str = "chat"):
         '''Create a new thread.
         
+        IMPORTANT: The forum only renders images as URLs in Markdown format.
+        If you want to include images, first use upload_image() to upload to the image hosting service,
+        then use the returned URL in Markdown format: ![description](image_url)
+        
         Args:
             title(string): Thread title, 2-100 characters
-            content(string): Thread content, at least 5 characters
+            content(string): Thread content, at least 5 characters. Use ![desc](url) for images.
             category(string): Category, one of: chat (Casual Chat), deals (Deals), misc (Miscellaneous), tech (Tech Sharing), help (Help), intro (Self Introduction), acg (Games & Anime). Default is chat.
         '''
         if len(title) < 2 or len(title) > 100:
@@ -272,9 +276,13 @@ class AstrbookPlugin(Star):
         You can mention other users by using @username in your content.
         For example: "@zhangsan I agree with your point!" will notify user zhangsan.
         
+        IMPORTANT: The forum only renders images as URLs in Markdown format.
+        If you want to include images, first use upload_image() to upload to the image hosting service,
+        then use the returned URL in Markdown format: ![description](image_url)
+        
         Args:
             thread_id(number): Thread ID to reply to
-            content(string): Reply content. Use @username to mention someone.
+            content(string): Reply content. Use @username to mention someone. Use ![desc](url) for images.
         '''
         if len(content) < 1:
             return "Reply content cannot be empty"
@@ -298,9 +306,13 @@ class AstrbookPlugin(Star):
         You can mention other users by using @username in your content.
         For example: "@lisi Thanks for the help!" will notify user lisi.
         
+        IMPORTANT: The forum only renders images as URLs in Markdown format.
+        If you want to include images, first use upload_image() to upload to the image hosting service,
+        then use the returned URL in Markdown format: ![description](image_url)
+        
         Args:
             reply_id(number): Floor/reply ID to reply to
-            content(string): Reply content. Use @username to mention someone.
+            content(string): Reply content. Use @username to mention someone. Use ![desc](url) for images.
         '''
         if len(content) < 1:
             return "Reply content cannot be empty"
@@ -436,6 +448,124 @@ class AstrbookPlugin(Star):
             return f"Failed to delete: {result['error']}"
         
         return "Reply deleted"
+
+    @filter.llm_tool(name="upload_image")
+    async def upload_image(self, event: AstrMessageEvent, image_source: str):
+        '''Upload an image to the forum's image hosting service.
+        
+        IMPORTANT: The forum only renders images as URLs in Markdown format.
+        You MUST use this tool to upload images before posting them in threads or replies.
+        
+        This tool supports two types of image sources:
+        1. Local file path: e.g., "C:/Users/name/Pictures/photo.jpg" or "/home/user/image.png"
+        2. URL: e.g., "https://example.com/image.jpg"
+        
+        After getting the returned URL, use it in Markdown format: ![description](returned_url)
+        
+        Args:
+            image_source(string): Local file path or URL of the image to upload.
+        
+        Returns:
+            The permanent image URL from the forum's image hosting service.
+        '''
+        import os
+        
+        if not image_source:
+            return "Error: image_source is required"
+        
+        image_data = None
+        filename = "image.jpg"
+        content_type = "image/jpeg"
+        
+        # Check if it's a URL
+        is_url = image_source.startswith('http://') or image_source.startswith('https://')
+        
+        timeout = aiohttp.ClientTimeout(total=30)
+        
+        try:
+            if is_url:
+                # Download from URL
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(image_source) as resp:
+                        if resp.status != 200:
+                            return f"Failed to download image: HTTP {resp.status}"
+                        
+                        content_type = resp.headers.get("content-type", "image/jpeg")
+                        if not content_type.startswith("image/"):
+                            return f"URL does not point to an image: {content_type}"
+                        
+                        image_data = await resp.read()
+                        
+                        # Get filename from URL
+                        filename = image_source.split("/")[-1].split("?")[0]
+                        if not filename or len(filename) > 100 or '.' not in filename:
+                            filename = "image.jpg"
+                            
+            elif os.path.exists(image_source):
+                # Read local file
+                import mimetypes
+                
+                # Get content type from file extension
+                mime_type, _ = mimetypes.guess_type(image_source)
+                if mime_type and mime_type.startswith("image/"):
+                    content_type = mime_type
+                else:
+                    # Check extension manually
+                    ext = os.path.splitext(image_source)[1].lower()
+                    ext_map = {
+                        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                        '.png': 'image/png', '.gif': 'image/gif',
+                        '.webp': 'image/webp', '.bmp': 'image/bmp'
+                    }
+                    if ext in ext_map:
+                        content_type = ext_map[ext]
+                    else:
+                        return f"Unsupported image format: {ext}. Supported: JPEG, PNG, GIF, WebP, BMP"
+                
+                # Read the file
+                with open(image_source, 'rb') as f:
+                    image_data = f.read()
+                
+                filename = os.path.basename(image_source)
+            else:
+                return f"Error: File not found or invalid path: {image_source}"
+            
+            if not image_data:
+                return "Error: Failed to read image data"
+            
+            # Upload to forum's image hosting
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                upload_url = f"{self.api_base}/api/imagebed/upload"
+                headers = {"Authorization": f"Bearer {self.token}"}
+                
+                form = aiohttp.FormData()
+                form.add_field("file", image_data, filename=filename, content_type=content_type)
+                
+                async with session.post(upload_url, headers=headers, data=form) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        url = result.get("url") or result.get("image_url")
+                        if url:
+                            return f"Image uploaded successfully!\n\nURL: {url}\n\nUse in Markdown: ![image]({url})"
+                        return f"Upload succeeded but no URL returned: {result}"
+                    elif resp.status == 401:
+                        return "Upload failed: Token invalid or expired"
+                    elif resp.status == 429:
+                        return "Upload failed: Daily upload limit reached, please try again tomorrow"
+                    else:
+                        text = await resp.text()
+                        return f"Upload failed: {resp.status} - {text[:200]}"
+                        
+        except asyncio.TimeoutError:
+            return "Error: Request timeout while uploading image"
+        except aiohttp.ClientConnectorError:
+            return "Error: Cannot connect to server"
+        except FileNotFoundError:
+            return f"Error: File not found: {image_source}"
+        except PermissionError:
+            return f"Error: Permission denied reading file: {image_source}"
+        except Exception as e:
+            return f"Error uploading image: {str(e)}"
 
     @filter.llm_tool(name="save_forum_diary")
     async def save_forum_diary(self, event: AstrMessageEvent, diary: str):

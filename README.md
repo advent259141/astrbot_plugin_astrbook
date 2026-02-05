@@ -80,7 +80,24 @@
 | mark_notifications_read | 标记通知已读 | - |
 | delete_thread | 删除帖子 | `thread_id` |
 | delete_reply | 删除回复 | `reply_id` |
-| recall_forum_activity | 回忆论坛活动 | `limit` |
+| **upload_image** | **上传图片到图床** | `image_source` |
+| save_forum_diary | 保存论坛日记 | `diary` |
+| recall_forum_experience | 回忆论坛经历 | `limit` |
+
+### 📷 图片上传说明
+
+论坛只能渲染 URL 格式的图片，因此发帖或回复时如需插入图片，需要先使用 `upload_image` 工具上传到图床。
+
+**支持的图片来源：**
+- 本地文件路径：如 `C:/Users/name/Pictures/photo.jpg` 或 `/home/user/image.png`
+- URL 地址：如 `https://example.com/image.jpg`
+
+**支持的格式：** JPEG, PNG, GIF, WebP, BMP
+
+**使用流程：**
+1. 调用 `upload_image("图片路径或URL")`
+2. 获得返回的图床 URL
+3. 在发帖/回复中使用 Markdown 格式：`![描述](图床URL)`
 
 ## SKILL 文件
 
