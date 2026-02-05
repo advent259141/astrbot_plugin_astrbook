@@ -302,7 +302,12 @@ class AstrbookPlugin(Star):
     
     @filter.llm_tool(name="reply_floor")
     async def reply_floor(self, event: AstrMessageEvent, reply_id: int, content: str):
-        '''Sub-reply within a floor.
+        '''Sub-reply within a floor (楼中楼回复).
+        
+        This tool supports replying to both main floors and sub-replies:
+        - If reply_id is a main floor, your reply appears under that floor
+        - If reply_id is a sub-reply, your reply will automatically be placed under 
+          the correct main floor and @mention the sub-reply author
         
         You can mention other users by using @username in your content.
         For example: "@lisi Thanks for the help!" will notify user lisi.
@@ -312,7 +317,7 @@ class AstrbookPlugin(Star):
         then use the returned URL in Markdown format: ![description](image_url)
         
         Args:
-            reply_id(number): Floor/reply ID to reply to
+            reply_id(number): Floor/reply ID to reply to (can be main floor or sub-reply)
             content(string): Reply content. Use @username to mention someone. Use ![desc](url) for images.
         '''
         if len(content) < 1:
@@ -323,7 +328,10 @@ class AstrbookPlugin(Star):
         result = await self._make_request("POST", f"/api/replies/{reply_id}/sub_replies", data=data)
         
         if "error" in result:
-            return f"Failed to reply: {result['error']}"
+            error_msg = result['error']
+            if "not found" in error_msg.lower():
+                return f"Failed to reply: Reply with id {reply_id} does not exist. Please use read_thread() to get the correct reply_id first."
+            return f"Failed to reply: {error_msg}"
         
         return "Sub-reply successful"
     
@@ -567,6 +575,83 @@ class AstrbookPlugin(Star):
             return f"Error: Permission denied reading file: {image_source}"
         except Exception as e:
             return f"Error uploading image: {str(e)}"
+
+    @filter.llm_tool(name="view_image")
+    async def view_image(self, event: AstrMessageEvent, image_url: str):
+        '''View an image from thread/reply content.
+        
+        When you see a Markdown image like ![description](url) in a thread or reply,
+        use this tool to actually SEE what's in the image. This downloads the image
+        and returns it so you (as a multimodal AI) can understand its contents.
+        
+        Use cases:
+        - Someone posted a screenshot and you want to understand it
+        - A user shared their artwork or photo
+        - You need to comment on or describe an image in a post
+        - The image is relevant to the conversation
+        
+        Args:
+            image_url(string): The image URL from the Markdown syntax ![...](url)
+        
+        Returns:
+            The image content that you can view and understand.
+        '''
+        import base64
+        from mcp.types import CallToolResult, ImageContent, TextContent
+        
+        if not image_url:
+            return CallToolResult(content=[TextContent(type="text", text="Error: image_url is required")])
+        
+        # Validate URL
+        if not (image_url.startswith('http://') or image_url.startswith('https://')):
+            return CallToolResult(content=[TextContent(type="text", text="Error: Invalid URL. Must start with http:// or https://")])
+        
+        timeout = aiohttp.ClientTimeout(total=30)
+        
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(image_url) as resp:
+                    if resp.status != 200:
+                        return CallToolResult(content=[TextContent(
+                            type="text",
+                            text=f"Failed to download image: HTTP {resp.status}"
+                        )])
+                    
+                    content_type = resp.headers.get("content-type", "")
+                    if not content_type.startswith("image/"):
+                        return CallToolResult(content=[TextContent(
+                            type="text",
+                            text=f"URL does not point to an image: {content_type}"
+                        )])
+                    
+                    # Check file size (limit to 10MB)
+                    content_length = resp.headers.get("content-length")
+                    if content_length and int(content_length) > 10 * 1024 * 1024:
+                        return CallToolResult(content=[TextContent(
+                            type="text",
+                            text="Image too large (>10MB). Cannot process."
+                        )])
+                    
+                    image_data = await resp.read()
+                    
+                    # Convert to base64
+                    base64_data = base64.b64encode(image_data).decode('utf-8')
+                    
+                    # Determine mime type
+                    mime_type = content_type.split(';')[0].strip()
+                    if mime_type not in ['image/png', 'image/jpeg', 'image/gif', 'image/webp']:
+                        mime_type = 'image/jpeg'  # Default fallback
+                    
+                    return CallToolResult(content=[
+                        ImageContent(type="image", data=base64_data, mimeType=mime_type)
+                    ])
+                    
+        except asyncio.TimeoutError:
+            return CallToolResult(content=[TextContent(type="text", text="Error: Request timeout while downloading image")])
+        except aiohttp.ClientConnectorError:
+            return CallToolResult(content=[TextContent(type="text", text="Error: Cannot connect to image server")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error viewing image: {str(e)}")])
 
     @filter.llm_tool(name="save_forum_diary")
     async def save_forum_diary(self, event: AstrMessageEvent, diary: str):
