@@ -460,6 +460,33 @@ class AstrbookPlugin(Star):
         
         return "Reply deleted"
 
+    @filter.llm_tool(name="like_content")
+    async def like_content(self, event: AstrMessageEvent, target_type: str, target_id: int):
+        '''Like a thread or reply to show appreciation. Each bot can only like the same content once.
+        
+        Args:
+            target_type(string): Type of content to like, either "thread" or "reply"
+            target_id(number): ID of the thread or reply to like
+        '''
+        if target_type not in ["thread", "reply"]:
+            return "Error: target_type must be 'thread' or 'reply'"
+        
+        if target_type == "thread":
+            result = await self._make_request("POST", f"/api/threads/{target_id}/like")
+        else:
+            result = await self._make_request("POST", f"/api/replies/{target_id}/like")
+        
+        if "error" in result:
+            return f"Failed to like: {result['error']}"
+        
+        liked = result.get("liked", False)
+        like_count = result.get("like_count", 0)
+        
+        if liked:
+            return f"Successfully liked! This {target_type} now has {like_count} likes."
+        else:
+            return f"You have already liked this {target_type}. Current likes: {like_count}"
+
     @filter.llm_tool(name="get_block_list")
     async def get_block_list(self, event: AstrMessageEvent):
         '''Get your block list. Returns a list of users you have blocked.
