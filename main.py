@@ -1042,7 +1042,7 @@ class AstrbookPlugin(Star):
         """查看或切换 AstrBook 适配器的人格
 
         Args:
-            persona_name: 人格名称，留空查看当前状态，输入 list 列出所有人格，输入 unset 取消人格
+            persona_name: 人格名称，留空查看当前状态，输入 unset 取消人格
         """
         umo = self._get_astrbook_umo()
         if not umo:
@@ -1067,7 +1067,6 @@ class AstrbookPlugin(Star):
                     event.set_result(
                         MessageEventResult().message(
                             f"📋 AstrBook 适配器当前人格：{current_persona}\n\n"
-                            f"使用 /astrbook persona list 查看所有可用人格\n"
                             f"使用 /astrbook persona <名称> 切换人格\n"
                             f"使用 /astrbook persona unset 取消人格"
                         )
@@ -1076,35 +1075,9 @@ class AstrbookPlugin(Star):
                     event.set_result(
                         MessageEventResult().message(
                             "📋 AstrBook 适配器当前未设置人格（使用默认）\n\n"
-                            "使用 /astrbook persona list 查看所有可用人格\n"
                             "使用 /astrbook persona <名称> 切换人格"
                         )
                     )
-                return
-
-            # "list" argument: list all personas
-            if persona_name == "list":
-                personas = await self.context.persona_manager.get_all_personas()
-                if not personas:
-                    event.set_result(
-                        MessageEventResult().message("ℹ️ 当前没有可用的人格。请先在管理面板创建人格。")
-                    )
-                    return
-
-                lines = ["📝 可用人格列表：", ""]
-                for p in personas:
-                    name = p.name if hasattr(p, "name") else str(p)
-                    prompt = ""
-                    if hasattr(p, "system_prompt") and p.system_prompt:
-                        prompt = p.system_prompt[:60] + ("..." if len(p.system_prompt) > 60 else "")
-                    lines.append(f"  • {name}")
-                    if prompt:
-                        lines.append(f"    {prompt}")
-                lines.append("")
-                lines.append("使用 /astrbook persona <名称> 切换人格")
-                event.set_result(
-                    MessageEventResult().message("\n".join(lines))
-                )
                 return
 
             # "unset" argument: unset persona
@@ -1124,8 +1097,7 @@ class AstrbookPlugin(Star):
                 event.set_result(
                     MessageEventResult().message(
                         f"❌ 未找到人格「{persona_name}」\n\n"
-                        f"可用人格：{', '.join(persona_names) if persona_names else '无'}\n"
-                        f"使用 /astrbook persona list 查看详情"
+                        f"可用人格：{', '.join(persona_names) if persona_names else '无'}"
                     )
                 )
                 return
@@ -1165,7 +1137,7 @@ class AstrbookPlugin(Star):
             adapter = self._get_astrbook_adapter()
             platform_id = adapter.meta().id if adapter else None
 
-            new_cid = await self.context.conversation_manager.new_conversation(
+            await self.context.conversation_manager.new_conversation(
                 umo, platform_id=platform_id, persona_id=current_persona
             )
             event.set_result(
@@ -1192,19 +1164,10 @@ class AstrbookPlugin(Star):
 
         try:
             umo = adapter.get_unified_msg_origin()
-            ws_status = "🟢 已连接" if adapter._ws_connected else "🔴 未连接"
+            conn_status = "🟢 已连接" if adapter._ws_connected else "🔴 未连接"
+            conn_mode = "SSE" if adapter.connection_mode == "sse" else "WebSocket"
             browse_status = "✅ 已启用" if adapter.auto_browse else "❌ 未启用"
             reply_status = "✅ 已启用" if adapter.auto_reply_mentions else "❌ 未启用"
-
-            # Get current conversation info
-            conv_info = "无活跃对话"
-            cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
-            if cid:
-                conv = await self.context.conversation_manager.get_conversation(umo, cid)
-                if conv:
-                    history_len = len(conv.content) if conv.content else 0
-                    persona = conv.persona_id if conv.persona_id and conv.persona_id != "[%None]" else "默认"
-                    conv_info = f"对话历史 {history_len} 条 | 人格：{persona}"
 
             # Get memory summary
             memory_count = len(adapter.memory._memories)
@@ -1212,12 +1175,11 @@ class AstrbookPlugin(Star):
             lines = [
                 "📊 AstrBook 适配器状态",
                 "═══════════════════════",
-                f"  WebSocket: {ws_status}",
+                f"  {conn_mode}: {conn_status}",
                 f"  自动浏览: {browse_status}（间隔 {adapter.browse_interval}s）",
                 f"  自动回复: {reply_status}（概率 {adapter.reply_probability:.0%}）",
                 f"  记忆条目: {memory_count}/{adapter.max_memory_items}",
                 f"  自定义提示词: {'✅ 已设置' if adapter.custom_prompt else '❌ 未设置（使用默认）'}",
-                f"  会话: {conv_info}",
                 f"  UMO: {umo}",
                 "",
                 "📋 可用指令：",
@@ -1248,8 +1210,9 @@ class AstrbookPlugin(Star):
             return
 
         if not adapter._ws_connected:
+            conn_mode = "SSE" if adapter.connection_mode == "sse" else "WebSocket"
             event.set_result(
-                MessageEventResult().message("❌ AstrBook 适配器 WebSocket 未连接，无法执行逛帖。")
+                MessageEventResult().message(f"❌ AstrBook 适配器 {conn_mode} 未连接，无法执行逛帖。")
             )
             return
 
