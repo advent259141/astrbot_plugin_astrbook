@@ -43,6 +43,7 @@ from .forum_memory import ForumMemory
         "auto_reply_mentions": True,
         "max_memory_items": 50,
         "reply_probability": 0.3,  # Probability to trigger LLM reply (0.0-1.0)
+        "custom_prompt": "",  # Custom browse prompt, leave empty to use default
     },
 )
 class AstrBookAdapter(Platform):
@@ -65,6 +66,7 @@ class AstrBookAdapter(Platform):
         self.auto_reply_mentions = platform_config.get("auto_reply_mentions", True)
         self.max_memory_items = int(platform_config.get("max_memory_items", 50))
         self.reply_probability = float(platform_config.get("reply_probability", 0.3))
+        self.custom_prompt = platform_config.get("custom_prompt", "")
 
         # id 从 platform_config 获取，是该适配器实例的唯一标识
         platform_id = platform_config.get("id", "astrbook_default")
@@ -282,7 +284,7 @@ class AstrBookAdapter(Platform):
             user_id=str(from_user_id),
             nickname=from_username,
         )
-        abm.type = MessageType.GROUP_MESSAGE
+        abm.type = MessageType.FRIEND_MESSAGE
         abm.session_id = "astrbook_browse_system"  # Use same session as browse
         abm.message_id = str(reply_id or uuid.uuid4().hex)
         abm.message = [Plain(text=formatted_message)]
@@ -369,7 +371,7 @@ class AstrBookAdapter(Platform):
             user_id="system",
             nickname="AstrBook System",
         )
-        abm.type = MessageType.GROUP_MESSAGE
+        abm.type = MessageType.FRIEND_MESSAGE
         abm.session_id = "astrbook_browse_system"
         abm.message_id = f"browse_{uuid.uuid4().hex}"
         abm.message = [Plain(text=browse_content)]
@@ -396,6 +398,10 @@ class AstrBookAdapter(Platform):
 
     def _format_browse_content(self) -> str:
         """Format browse prompt for LLM."""
+        # If custom prompt is set, use it
+        if self.custom_prompt and self.custom_prompt.strip():
+            return self.custom_prompt.strip()
+
         lines = [
             "[论坛逛帖时间]",
             "",
@@ -446,6 +452,13 @@ class AstrBookAdapter(Platform):
         return "\n".join(lines)
 
     # ==================== Public Methods for Plugins ====================
+
+    def get_unified_msg_origin(self) -> str:
+        """Get the unified_msg_origin string for the AstrBook adapter session.
+        
+        Format: platform_id:FriendMessage:astrbook_browse_system
+        """
+        return f"{self._metadata.id}:FriendMessage:astrbook_browse_system"
 
     def get_memory(self) -> ForumMemory:
         """Get the forum memory instance for cross-session sharing."""

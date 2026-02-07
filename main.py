@@ -59,6 +59,11 @@ class AstrbookPlugin(Star):
             "description": "回复概率",
             "type": "float",
             "hint": "astbook 自动回复概率",
+        },
+        "custom_prompt": {
+            "description": "自定义逛帖提示词",
+            "type": "string",
+            "hint": "自定义浏览论坛时的提示词，留空使用默认",
         }
     }
 
@@ -982,6 +987,283 @@ class AstrbookPlugin(Star):
             
         except Exception as e:
             return f"回忆论坛经历时出错: {str(e)}"
+
+    # ==================== AstrBook Session Control Commands ====================
+
+    def _get_astrbook_adapter(self):
+        """Get the AstrBook adapter instance from the platform manager."""
+        from .adapter.astrbook_adapter import AstrBookAdapter
+        for platform in self.context.platform_manager.platform_insts:
+            if isinstance(platform, AstrBookAdapter):
+                return platform
+        return None
+
+    def _get_astrbook_umo(self) -> str | None:
+        """Get the unified_msg_origin for the AstrBook adapter session."""
+        adapter = self._get_astrbook_adapter()
+        if adapter:
+            return adapter.get_unified_msg_origin()
+        return None
+
+    @filter.command_group("astrbook")
+    def astrbook_cmd(self):
+        """AstrBook 论坛适配器控制指令"""
+
+    @astrbook_cmd.command("reset")
+    async def astrbook_reset(self, event: AstrMessageEvent):
+        """重置 AstrBook 适配器的对话历史"""
+        umo = self._get_astrbook_umo()
+        if not umo:
+            event.set_result(
+                MessageEventResult().message("❌ 未找到 AstrBook 适配器实例，请确认适配器已启用。")
+            )
+            return
+
+        try:
+            cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
+            if not cid:
+                event.set_result(
+                    MessageEventResult().message("ℹ️ AstrBook 适配器当前没有活跃的对话。")
+                )
+                return
+
+            await self.context.conversation_manager.update_conversation(umo, cid, [])
+            event.set_result(
+                MessageEventResult().message("✅ 已重置 AstrBook 适配器的对话历史。")
+            )
+        except Exception as e:
+            logger.error(f"[astrbook] Failed to reset conversation: {e}", exc_info=True)
+            event.set_result(
+                MessageEventResult().message(f"❌ 重置失败: {e}")
+            )
+
+    @astrbook_cmd.command("persona")
+    async def astrbook_persona(self, event: AstrMessageEvent, persona_name: str = None):
+        """查看或切换 AstrBook 适配器的人格
+
+        Args:
+            persona_name: 人格名称，留空查看当前状态，输入 list 列出所有人格，输入 unset 取消人格
+        """
+        umo = self._get_astrbook_umo()
+        if not umo:
+            event.set_result(
+                MessageEventResult().message("❌ 未找到 AstrBook 适配器实例，请确认适配器已启用。")
+            )
+            return
+
+        try:
+            # No argument: show current persona status
+            if not persona_name:
+                cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                if not cid:
+                    event.set_result(
+                        MessageEventResult().message("ℹ️ AstrBook 适配器当前没有活跃的对话。")
+                    )
+                    return
+
+                conv = await self.context.conversation_manager.get_conversation(umo, cid)
+                current_persona = conv.persona_id if conv else None
+                if current_persona and current_persona != "[%None]":
+                    event.set_result(
+                        MessageEventResult().message(
+                            f"📋 AstrBook 适配器当前人格：{current_persona}\n\n"
+                            f"使用 /astrbook persona list 查看所有可用人格\n"
+                            f"使用 /astrbook persona <名称> 切换人格\n"
+                            f"使用 /astrbook persona unset 取消人格"
+                        )
+                    )
+                else:
+                    event.set_result(
+                        MessageEventResult().message(
+                            "📋 AstrBook 适配器当前未设置人格（使用默认）\n\n"
+                            "使用 /astrbook persona list 查看所有可用人格\n"
+                            "使用 /astrbook persona <名称> 切换人格"
+                        )
+                    )
+                return
+
+            # "list" argument: list all personas
+            if persona_name == "list":
+                personas = await self.context.persona_manager.get_all_personas()
+                if not personas:
+                    event.set_result(
+                        MessageEventResult().message("ℹ️ 当前没有可用的人格。请先在管理面板创建人格。")
+                    )
+                    return
+
+                lines = ["📝 可用人格列表：", ""]
+                for p in personas:
+                    name = p.name if hasattr(p, "name") else str(p)
+                    prompt = ""
+                    if hasattr(p, "system_prompt") and p.system_prompt:
+                        prompt = p.system_prompt[:60] + ("..." if len(p.system_prompt) > 60 else "")
+                    lines.append(f"  • {name}")
+                    if prompt:
+                        lines.append(f"    {prompt}")
+                lines.append("")
+                lines.append("使用 /astrbook persona <名称> 切换人格")
+                event.set_result(
+                    MessageEventResult().message("\n".join(lines))
+                )
+                return
+
+            # "unset" argument: unset persona
+            if persona_name == "unset":
+                await self.context.conversation_manager.update_conversation_persona_id(
+                    umo, "[%None]"
+                )
+                event.set_result(
+                    MessageEventResult().message("✅ 已取消 AstrBook 适配器的人格设置。")
+                )
+                return
+
+            # Set persona by name
+            personas = await self.context.persona_manager.get_all_personas()
+            persona_names = [p.name for p in personas if hasattr(p, "name")]
+            if persona_name not in persona_names:
+                event.set_result(
+                    MessageEventResult().message(
+                        f"❌ 未找到人格「{persona_name}」\n\n"
+                        f"可用人格：{', '.join(persona_names) if persona_names else '无'}\n"
+                        f"使用 /astrbook persona list 查看详情"
+                    )
+                )
+                return
+
+            await self.context.conversation_manager.update_conversation_persona_id(
+                umo, persona_name
+            )
+            event.set_result(
+                MessageEventResult().message(f"✅ 已将 AstrBook 适配器的人格切换为「{persona_name}」")
+            )
+
+        except Exception as e:
+            logger.error(f"[astrbook] Failed to manage persona: {e}", exc_info=True)
+            event.set_result(
+                MessageEventResult().message(f"❌ 操作失败: {e}")
+            )
+
+    @astrbook_cmd.command("new")
+    async def astrbook_new_conv(self, event: AstrMessageEvent):
+        """为 AstrBook 适配器创建一个新的对话（保留当前人格）"""
+        umo = self._get_astrbook_umo()
+        if not umo:
+            event.set_result(
+                MessageEventResult().message("❌ 未找到 AstrBook 适配器实例，请确认适配器已启用。")
+            )
+            return
+
+        try:
+            # Get current persona to preserve it
+            current_persona = None
+            cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
+            if cid:
+                conv = await self.context.conversation_manager.get_conversation(umo, cid)
+                if conv and conv.persona_id and conv.persona_id != "[%None]":
+                    current_persona = conv.persona_id
+
+            adapter = self._get_astrbook_adapter()
+            platform_id = adapter.meta().id if adapter else None
+
+            new_cid = await self.context.conversation_manager.new_conversation(
+                umo, platform_id=platform_id, persona_id=current_persona
+            )
+            event.set_result(
+                MessageEventResult().message(
+                    f"✅ 已为 AstrBook 适配器创建新对话。\n"
+                    f"{'人格：' + current_persona if current_persona else '使用默认人格'}"
+                )
+            )
+        except Exception as e:
+            logger.error(f"[astrbook] Failed to create new conversation: {e}", exc_info=True)
+            event.set_result(
+                MessageEventResult().message(f"❌ 创建新对话失败: {e}")
+            )
+
+    @astrbook_cmd.command("status")
+    async def astrbook_status(self, event: AstrMessageEvent):
+        """查看 AstrBook 适配器的状态信息"""
+        adapter = self._get_astrbook_adapter()
+        if not adapter:
+            event.set_result(
+                MessageEventResult().message("❌ 未找到 AstrBook 适配器实例，请确认适配器已启用。")
+            )
+            return
+
+        try:
+            umo = adapter.get_unified_msg_origin()
+            ws_status = "🟢 已连接" if adapter._ws_connected else "🔴 未连接"
+            browse_status = "✅ 已启用" if adapter.auto_browse else "❌ 未启用"
+            reply_status = "✅ 已启用" if adapter.auto_reply_mentions else "❌ 未启用"
+
+            # Get current conversation info
+            conv_info = "无活跃对话"
+            cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
+            if cid:
+                conv = await self.context.conversation_manager.get_conversation(umo, cid)
+                if conv:
+                    history_len = len(conv.content) if conv.content else 0
+                    persona = conv.persona_id if conv.persona_id and conv.persona_id != "[%None]" else "默认"
+                    conv_info = f"对话历史 {history_len} 条 | 人格：{persona}"
+
+            # Get memory summary
+            memory_count = len(adapter.memory._memories)
+
+            lines = [
+                "📊 AstrBook 适配器状态",
+                "═══════════════════════",
+                f"  WebSocket: {ws_status}",
+                f"  自动浏览: {browse_status}（间隔 {adapter.browse_interval}s）",
+                f"  自动回复: {reply_status}（概率 {adapter.reply_probability:.0%}）",
+                f"  记忆条目: {memory_count}/{adapter.max_memory_items}",
+                f"  自定义提示词: {'✅ 已设置' if adapter.custom_prompt else '❌ 未设置（使用默认）'}",
+                f"  会话: {conv_info}",
+                f"  UMO: {umo}",
+                "",
+                "📋 可用指令：",
+                "  /astrbook reset - 重置对话历史",
+                "  /astrbook persona [名称] - 查看/切换人格",
+                "  /astrbook new - 创建新对话",
+                "  /astrbook browse - 立即触发逛帖",
+                "  /astrbook status - 查看状态",
+            ]
+
+            event.set_result(
+                MessageEventResult().message("\n".join(lines))
+            )
+        except Exception as e:
+            logger.error(f"[astrbook] Failed to get status: {e}", exc_info=True)
+            event.set_result(
+                MessageEventResult().message(f"❌ 获取状态失败: {e}")
+            )
+
+    @astrbook_cmd.command("browse")
+    async def astrbook_browse(self, event: AstrMessageEvent):
+        """立即触发 AstrBook 适配器执行一次逛帖"""
+        adapter = self._get_astrbook_adapter()
+        if not adapter:
+            event.set_result(
+                MessageEventResult().message("❌ 未找到 AstrBook 适配器实例，请确认适配器已启用。")
+            )
+            return
+
+        if not adapter._ws_connected:
+            event.set_result(
+                MessageEventResult().message("❌ AstrBook 适配器 WebSocket 未连接，无法执行逛帖。")
+            )
+            return
+
+        try:
+            # Trigger browse in background
+            asyncio.create_task(adapter._do_browse())
+            event.set_result(
+                MessageEventResult().message("✅ 已触发 AstrBook 逛帖任务，Bot 将开始浏览论坛。")
+            )
+        except Exception as e:
+            logger.error(f"[astrbook] Failed to trigger browse: {e}", exc_info=True)
+            event.set_result(
+                MessageEventResult().message(f"❌ 触发逛帖失败: {e}")
+            )
 
     def _register_config(self):
         if self._registered:
