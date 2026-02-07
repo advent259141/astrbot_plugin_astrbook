@@ -1,7 +1,7 @@
 """AstrBook Platform Adapter - Forum as a messaging platform for AstrBot.
 
 This adapter enables AstrBot to interact with AstrBook forum,
-treating it as a native messaging platform with WebSocket-based
+treating it as a native messaging platform with WebSocket/SSE-based
 real-time notifications and scheduled browsing capabilities.
 """
 
@@ -36,8 +36,8 @@ from .forum_memory import ForumMemory
     "AstrBook 论坛适配器 - 让 Bot 成为论坛的一员",
     default_config_tmpl={
         "api_base": "https://book.astrbot.app",
-        "ws_url": "wss://book.astrbot.app/ws/bot",
         "token": "",
+        "connection_mode": "sse",  # "ws" or "sse", default SSE
         "auto_browse": True,
         "browse_interval": 3600,
         "auto_reply_mentions": True,
@@ -59,8 +59,10 @@ class AstrBookAdapter(Platform):
 
         self.settings = platform_settings
         self.api_base = platform_config.get("api_base", "https://book.astrbot.app")
-        self.ws_url = platform_config.get("ws_url", "wss://book.astrbot.app/ws/bot")
+        # ws_url auto-derived from api_base
+        self.ws_url = platform_config.get("api_base", "https://book.astrbot.app").replace("http://", "ws://").replace("https://", "wss://") + "/ws/bot"
         self.token = platform_config.get("token", "")
+        self.connection_mode = platform_config.get("connection_mode", "sse").lower()
         self.auto_browse = platform_config.get("auto_browse", True)
         self.browse_interval = int(platform_config.get("browse_interval", 3600))
         self.auto_reply_mentions = platform_config.get("auto_reply_mentions", True)
@@ -76,9 +78,10 @@ class AstrBookAdapter(Platform):
             id=platform_id,
         )
 
-        # WebSocket connection state
+        # WebSocket / SSE connection state
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._ws_session: aiohttp.ClientSession | None = None
+        self._sse_session: aiohttp.ClientSession | None = None
         self._ws_connected = False
         self._reconnect_delay = 5
         self._max_reconnect_delay = 60
@@ -113,15 +116,18 @@ class AstrBookAdapter(Platform):
         return self._run()
 
     async def _run(self):
-        """Run the adapter with WebSocket and optional auto-browse."""
+        """Run the adapter with WebSocket/SSE and optional auto-browse."""
         if not self.token:
             logger.error("[AstrBook] Token not configured, adapter disabled")
             return
 
-        logger.info("[AstrBook] Starting AstrBook platform adapter...")
+        logger.info(f"[AstrBook] Starting AstrBook platform adapter (mode={self.connection_mode})...")
 
-        ws_task = asyncio.create_task(self._ws_loop())
-        self._tasks.append(ws_task)
+        if self.connection_mode == "sse":
+            conn_task = asyncio.create_task(self._sse_loop())
+        else:
+            conn_task = asyncio.create_task(self._ws_loop())
+        self._tasks.append(conn_task)
 
         if self.auto_browse:
             browse_task = asyncio.create_task(self._auto_browse_loop())
@@ -136,17 +142,129 @@ class AstrBookAdapter(Platform):
         """Terminate the adapter."""
         logger.info("[AstrBook] Terminating adapter...")
 
+        # Cancel all running tasks
         for task in self._tasks:
             if not task.done():
                 task.cancel()
 
+        # Wait for tasks to actually finish
+        for task in self._tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._tasks.clear()
+
+        # Close WebSocket connection
         if self._ws and not self._ws.closed:
             await self._ws.close()
 
         if self._ws_session and not self._ws_session.closed:
             await self._ws_session.close()
 
+        # Close SSE session
+        if self._sse_session and not self._sse_session.closed:
+            await self._sse_session.close()
+
+        self._ws = None
+        self._ws_session = None
+        self._sse_session = None
         self._ws_connected = False
+        logger.info("[AstrBook] Adapter terminated")
+
+    # ==================== SSE Connection ====================
+
+    async def _sse_loop(self):
+        """SSE connection loop with auto-reconnect."""
+        reconnect_delay = self._reconnect_delay
+
+        while True:
+            try:
+                await self._sse_connect()
+                reconnect_delay = self._reconnect_delay
+            except aiohttp.ClientError as e:
+                logger.error(f"[AstrBook] SSE connection error: {e}")
+            except Exception as e:
+                logger.error(f"[AstrBook] Unexpected error in SSE loop: {e}")
+
+            self._ws_connected = False
+            logger.info(f"[AstrBook] SSE reconnecting in {reconnect_delay}s...")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, self._max_reconnect_delay)
+
+    async def _sse_connect(self):
+        """Establish SSE connection."""
+        # Build SSE URL from api_base
+        sse_url = f"{self.api_base}/sse/bot?token={self.token}"
+
+        session = aiohttp.ClientSession()
+        self._sse_session = session
+        logger.info(f"[AstrBook] Connecting to SSE: {self.api_base}/sse/bot")
+
+        try:
+            async with session.get(
+                sse_url,
+                headers={"Accept": "text/event-stream"},
+                timeout=aiohttp.ClientTimeout(total=None, sock_read=None),
+            ) as resp:
+                if resp.status == 401:
+                    logger.error("[AstrBook] SSE authentication failed: invalid or expired token")
+                    return
+
+                if resp.status != 200:
+                    logger.error(f"[AstrBook] SSE connection failed with status {resp.status}")
+                    return
+
+                self._ws_connected = True
+                logger.info("[AstrBook] SSE connected successfully")
+
+                # Parse SSE stream
+                buffer = ""
+                async for chunk in resp.content:
+                    if not chunk:
+                        continue
+
+                    text = chunk.decode("utf-8", errors="replace")
+                    buffer += text
+
+                    # Process complete SSE messages (separated by double newline)
+                    while "\n\n" in buffer:
+                        message_block, buffer = buffer.split("\n\n", 1)
+                        await self._parse_sse_block(message_block)
+
+        finally:
+            self._ws_connected = False
+            if not session.closed:
+                await session.close()
+
+    async def _parse_sse_block(self, block: str):
+        """Parse a single SSE message block."""
+        import json
+
+        event_type = None
+        data_lines = []
+
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                event_type = line[7:].strip()
+            elif line.startswith("data: "):
+                data_lines.append(line[6:])
+            elif line.startswith(":"):
+                # SSE comment (keep-alive ping), ignore
+                pass
+
+        if not data_lines:
+            return
+
+        data_str = "\n".join(data_lines)
+        try:
+            data = json.loads(data_str)
+        except json.JSONDecodeError:
+            logger.warning(f"[AstrBook] Failed to parse SSE data: {data_str[:100]}")
+            return
+
+        # Handle the message the same way as WebSocket
+        await self._handle_message(data)
 
     # ==================== WebSocket Connection ====================
 
@@ -185,7 +303,7 @@ class AstrBookAdapter(Platform):
             try:
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_ws_message(msg.json())
+                        await self._handle_message(msg.json())
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         logger.error(f"[AstrBook] WebSocket error: {ws.exception()}")
                         break
@@ -205,10 +323,10 @@ class AstrBookAdapter(Platform):
             except Exception:
                 break
 
-    async def _handle_ws_message(self, data: dict):
-        """Handle incoming WebSocket message."""
+    async def _handle_message(self, data: dict):
+        """Handle incoming realtime message (from WS or SSE)."""
         msg_type = data.get("type")
-        logger.debug(f"[AstrBook] Received WS message: {msg_type}")
+        logger.debug(f"[AstrBook] Received message: {msg_type}")
 
         if msg_type == "connected":
             self.bot_user_id = data.get("user_id")

@@ -25,10 +25,10 @@ class AstrbookPlugin(Star):
             "type": "string",
             "hint": "astbook API 的基础地址",
         },
-        "ws_url": {
-            "description": "ws连接地址",
+        "connection_mode": {
+            "description": "连接方式",
             "type": "string",
-            "hint": "astbook ws连接的基础地址",
+            "hint": "实时通知的连接方式：sse（推荐）或 ws（WebSocket）",
         },
         "token": {
             "description": "astbook 平台token",
