@@ -37,7 +37,6 @@ from .forum_memory import ForumMemory
     default_config_tmpl={
         "api_base": "https://book.astrbot.app",
         "token": "",
-        "connection_mode": "sse",  # "ws" or "sse", default SSE
         "auto_browse": True,
         "browse_interval": 3600,
         "auto_reply_mentions": True,
@@ -59,10 +58,7 @@ class AstrBookAdapter(Platform):
 
         self.settings = platform_settings
         self.api_base = platform_config.get("api_base", "https://book.astrbot.app")
-        # ws_url auto-derived from api_base
-        self.ws_url = platform_config.get("api_base", "https://book.astrbot.app").replace("http://", "ws://").replace("https://", "wss://") + "/ws/bot"
         self.token = platform_config.get("token", "")
-        self.connection_mode = platform_config.get("connection_mode", "sse").lower()
         self.auto_browse = platform_config.get("auto_browse", True)
         self.browse_interval = int(platform_config.get("browse_interval", 3600))
         self.auto_reply_mentions = platform_config.get("auto_reply_mentions", True)
@@ -78,11 +74,9 @@ class AstrBookAdapter(Platform):
             id=platform_id,
         )
 
-        # WebSocket / SSE connection state
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._ws_session: aiohttp.ClientSession | None = None
+        # SSE connection state
         self._sse_session: aiohttp.ClientSession | None = None
-        self._ws_connected = False
+        self._connected = False
         self._reconnect_delay = 5
         self._max_reconnect_delay = 60
 
@@ -121,12 +115,9 @@ class AstrBookAdapter(Platform):
             logger.error("[AstrBook] Token not configured, adapter disabled")
             return
 
-        logger.info(f"[AstrBook] Starting AstrBook platform adapter (mode={self.connection_mode})...")
+        logger.info("[AstrBook] Starting AstrBook platform adapter...")
 
-        if self.connection_mode == "sse":
-            conn_task = asyncio.create_task(self._sse_loop())
-        else:
-            conn_task = asyncio.create_task(self._ws_loop())
+        conn_task = asyncio.create_task(self._sse_loop())
         self._tasks.append(conn_task)
 
         if self.auto_browse:
@@ -155,21 +146,12 @@ class AstrBookAdapter(Platform):
                 pass
         self._tasks.clear()
 
-        # Close WebSocket connection
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-
-        if self._ws_session and not self._ws_session.closed:
-            await self._ws_session.close()
-
         # Close SSE session
         if self._sse_session and not self._sse_session.closed:
             await self._sse_session.close()
 
-        self._ws = None
-        self._ws_session = None
         self._sse_session = None
-        self._ws_connected = False
+        self._connected = False
         logger.info("[AstrBook] Adapter terminated")
 
     # ==================== SSE Connection ====================
@@ -187,7 +169,7 @@ class AstrBookAdapter(Platform):
             except Exception as e:
                 logger.error(f"[AstrBook] Unexpected error in SSE loop: {e}")
 
-            self._ws_connected = False
+            self._connected = False
             logger.info(f"[AstrBook] SSE reconnecting in {reconnect_delay}s...")
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, self._max_reconnect_delay)
@@ -215,7 +197,7 @@ class AstrBookAdapter(Platform):
                     logger.error(f"[AstrBook] SSE connection failed with status {resp.status}")
                     return
 
-                self._ws_connected = True
+                self._connected = True
                 logger.info("[AstrBook] SSE connected successfully")
 
                 # Parse SSE stream
@@ -233,7 +215,7 @@ class AstrBookAdapter(Platform):
                         await self._parse_sse_block(message_block)
 
         finally:
-            self._ws_connected = False
+            self._connected = False
             if not session.closed:
                 await session.close()
 
@@ -268,63 +250,8 @@ class AstrBookAdapter(Platform):
 
     # ==================== WebSocket Connection ====================
 
-    async def _ws_loop(self):
-        """WebSocket connection loop with auto-reconnect."""
-        reconnect_delay = self._reconnect_delay
-
-        while True:
-            try:
-                await self._ws_connect()
-                reconnect_delay = self._reconnect_delay
-            except aiohttp.ClientError as e:
-                logger.error(f"[AstrBook] WebSocket connection error: {e}")
-            except Exception as e:
-                logger.error(f"[AstrBook] Unexpected error in WebSocket loop: {e}")
-
-            logger.info(f"[AstrBook] Reconnecting in {reconnect_delay}s...")
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, self._max_reconnect_delay)
-
-    async def _ws_connect(self):
-        """Establish WebSocket connection."""
-        ws_url = f"{self.ws_url}?token={self.token}"
-
-        session = aiohttp.ClientSession()
-        self._ws_session = session
-        logger.info(f"[AstrBook] Connecting to WebSocket: {self.ws_url}")
-
-        async with session.ws_connect(ws_url) as ws:
-            self._ws = ws
-            self._ws_connected = True
-            logger.info("[AstrBook] WebSocket connected successfully")
-
-            heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-
-            try:
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_message(msg.json())
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        logger.error(f"[AstrBook] WebSocket error: {ws.exception()}")
-                        break
-                    elif msg.type == aiohttp.WSMsgType.CLOSED:
-                        logger.info("[AstrBook] WebSocket closed by server")
-                        break
-            finally:
-                heartbeat_task.cancel()
-                self._ws_connected = False
-
-    async def _heartbeat_loop(self):
-        """Send heartbeat pings to keep connection alive."""
-        while self._ws_connected and self._ws and not self._ws.closed:
-            try:
-                await self._ws.ping()
-                await asyncio.sleep(30)
-            except Exception:
-                break
-
     async def _handle_message(self, data: dict):
-        """Handle incoming realtime message (from WS or SSE)."""
+        """Handle incoming SSE message."""
         msg_type = data.get("type")
         logger.debug(f"[AstrBook] Received message: {msg_type}")
 
@@ -334,9 +261,6 @@ class AstrBookAdapter(Platform):
                 f"[AstrBook] Connected as user {data.get('message')}, "
                 f"user_id={self.bot_user_id}"
             )
-            return
-
-        if msg_type == "pong":
             return
 
         if msg_type in ("reply", "sub_reply", "mention"):

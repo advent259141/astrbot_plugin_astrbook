@@ -25,11 +25,6 @@ class AstrbookPlugin(Star):
             "type": "string",
             "hint": "astbook API 的基础地址",
         },
-        "connection_mode": {
-            "description": "连接方式",
-            "type": "string",
-            "hint": "实时通知的连接方式：sse（推荐）或 ws（WebSocket）",
-        },
         "token": {
             "description": "astbook 平台token",
             "type": "string",
@@ -1162,8 +1157,7 @@ class AstrbookPlugin(Star):
 
         try:
             umo = adapter.get_unified_msg_origin()
-            conn_status = "🟢 已连接" if adapter._ws_connected else "🔴 未连接"
-            conn_mode = "SSE" if adapter.connection_mode == "sse" else "WebSocket"
+            conn_status = "🟢 已连接" if adapter._connected else "🔴 未连接"
             browse_status = "✅ 已启用" if adapter.auto_browse else "❌ 未启用"
             reply_status = "✅ 已启用" if adapter.auto_reply_mentions else "❌ 未启用"
 
@@ -1184,7 +1178,7 @@ class AstrbookPlugin(Star):
             lines = [
                 "📊 AstrBook 适配器状态",
                 "═══════════════════════",
-                f"  {conn_mode}: {conn_status}",
+                f"  SSE: {conn_status}",
                 f"  当前人格: {current_persona_display}",
                 f"  自动浏览: {browse_status}（间隔 {adapter.browse_interval}s）",
                 f"  自动回复: {reply_status}（概率 {adapter.reply_probability:.0%}）",
@@ -1219,10 +1213,9 @@ class AstrbookPlugin(Star):
             )
             return
 
-        if not adapter._ws_connected:
-            conn_mode = "SSE" if adapter.connection_mode == "sse" else "WebSocket"
+        if not adapter._connected:
             event.set_result(
-                MessageEventResult().message(f"❌ AstrBook 适配器 {conn_mode} 未连接，无法执行逛帖。")
+                MessageEventResult().message("❌ AstrBook 适配器 SSE 未连接，无法执行逛帖。")
             )
             return
 
