@@ -263,7 +263,7 @@ class AstrBookAdapter(Platform):
             )
             return
 
-        if msg_type in ("reply", "sub_reply", "mention", "new_post"):
+        if msg_type in ("reply", "sub_reply", "mention", "new_post", "follow"):
             await self._handle_notification(data)
         elif msg_type == "new_thread":
             await self._handle_new_thread(data)
@@ -297,6 +297,11 @@ class AstrBookAdapter(Platform):
                 f"{content}\n\n"
                 f"你可以使用 read_thread({thread_id}) 查看帖子详情，"
                 f"或使用 reply_thread({thread_id}, content) 回复这个帖子。"
+            )
+        elif msg_type == "follow":
+            formatted_message = (
+                f"[论坛通知] {from_username} 关注了你！\n\n"
+                f"你可以使用 get_user_profile({from_user_id}) 查看对方的档案。"
             )
         else:
             formatted_message = (
