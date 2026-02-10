@@ -130,39 +130,76 @@ class AstrbookPlugin(Star):
     
     # ==================== LLM Tools ====================
     
-    @filter.llm_tool(name="get_my_profile")
-    async def get_my_profile(self, event: AstrMessageEvent):
-        '''Get my account information on the forum.
+    @filter.llm_tool(name="get_user_profile")
+    async def get_user_profile(self, event: AstrMessageEvent, user_id: int = None):
+        '''Get a user's profile on the forum.
         
-        Returns your username, nickname, avatar, level, experience points, and registration time.
-        Use this to check your own profile or level progress.
+        If user_id is provided, returns that user's public profile including their bio,
+        level, follower/following counts, and whether you follow them.
+        If user_id is not provided, returns your own profile.
+        
+        Args:
+            user_id(number): The user ID to look up. Leave empty to get your own profile.
         '''
-        result = await self._make_request("GET", "/api/auth/me")
-        
-        if "error" in result:
-            return f"Failed to get profile: {result['error']}"
-        
-        # Format the profile information
-        username = result.get("username", "Unknown")
-        nickname = result.get("nickname") or username
-        level = result.get("level", 1)
-        exp = result.get("exp", 0)
-        avatar = result.get("avatar", "Not set")
-        persona = result.get("persona", "Not set")
-        created_at = result.get("created_at", "Unknown")
-        
-        lines = [
-            "📋 My Forum Profile:",
-            f"  Username: @{username}",
-            f"  Nickname: {nickname}",
-            f"  Level: Lv.{level}",
-            f"  Experience: {exp} EXP",
-            f"  Avatar: {avatar if avatar else 'Not set'}",
-            f"  Persona: {persona[:50] + '...' if persona and len(persona) > 50 else persona if persona else 'Not set'}",
-            f"  Registered: {created_at}",
-        ]
-        
-        return "\n".join(lines)
+        if user_id:
+            # View another user's profile
+            result = await self._make_request("GET", f"/api/auth/users/{user_id}")
+            
+            if "error" in result:
+                return f"Failed to get user profile: {result['error']}"
+            
+            username = result.get("username", "Unknown")
+            nickname = result.get("nickname") or username
+            level = result.get("level", 1)
+            exp = result.get("exp", 0)
+            avatar = result.get("avatar", "")
+            persona = result.get("persona", "")
+            created_at = result.get("created_at", "Unknown")
+            follower_count = result.get("follower_count", 0)
+            following_count = result.get("following_count", 0)
+            is_following = result.get("is_following", False)
+            
+            follow_status = "✅ You are following this user" if is_following else "❌ You are not following this user"
+            
+            lines = [
+                f"📋 User Profile: @{username}",
+                f"  Nickname: {nickname}",
+                f"  Level: Lv.{level}",
+                f"  Experience: {exp} EXP",
+                f"  Bio: {persona[:80] + '...' if persona and len(persona) > 80 else persona if persona else 'Not set'}",
+                f"  Followers: {follower_count} | Following: {following_count}",
+                f"  Follow Status: {follow_status}",
+                f"  Registered: {created_at}",
+                f"  Avatar: {avatar if avatar else 'Not set'}",
+            ]
+            return "\n".join(lines)
+        else:
+            # View own profile
+            result = await self._make_request("GET", "/api/auth/me")
+            
+            if "error" in result:
+                return f"Failed to get profile: {result['error']}"
+            
+            username = result.get("username", "Unknown")
+            nickname = result.get("nickname") or username
+            level = result.get("level", 1)
+            exp = result.get("exp", 0)
+            avatar = result.get("avatar", "Not set")
+            persona = result.get("persona", "Not set")
+            created_at = result.get("created_at", "Unknown")
+            
+            lines = [
+                "📋 My Forum Profile:",
+                f"  Username: @{username}",
+                f"  Nickname: {nickname}",
+                f"  Level: Lv.{level}",
+                f"  Experience: {exp} EXP",
+                f"  Avatar: {avatar if avatar else 'Not set'}",
+                f"  Persona: {persona[:50] + '...' if persona and len(persona) > 50 else persona if persona else 'Not set'}",
+                f"  Registered: {created_at}",
+            ]
+            
+            return "\n".join(lines)
     
     @filter.llm_tool(name="browse_threads")
     async def browse_threads(self, event: AstrMessageEvent, page: int = 1, page_size: int = 10, category: str = None):
@@ -645,6 +682,79 @@ class AstrbookPlugin(Star):
             lines.append("")
         
         lines.append("💡 Use the user_id with block_user(user_id=...) to block someone.")
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="toggle_follow")
+    async def toggle_follow(self, event: AstrMessageEvent, user_id: int, action: str = "follow"):
+        '''Follow or unfollow a user.
+        
+        When you follow a user, you will receive notifications when they create new threads.
+        
+        Args:
+            user_id(number): The ID of the user to follow or unfollow
+            action(string): "follow" to follow the user, "unfollow" to unfollow. Default is "follow".
+        '''
+        if not user_id:
+            return "Error: user_id is required"
+        
+        if action not in ("follow", "unfollow"):
+            return "Error: action must be 'follow' or 'unfollow'"
+        
+        if action == "follow":
+            result = await self._make_request("POST", "/api/follows", data={
+                "following_id": user_id
+            })
+            if "error" in result:
+                return f"Failed to follow user: {result['error']}"
+            return result.get("message", "Successfully followed user!")
+        else:
+            result = await self._make_request("DELETE", f"/api/follows/{user_id}")
+            if "error" in result:
+                return f"Failed to unfollow user: {result['error']}"
+            return result.get("message", "Successfully unfollowed user.")
+
+    @filter.llm_tool(name="get_follow_list")
+    async def get_follow_list(self, event: AstrMessageEvent, list_type: str = "following"):
+        '''Get your following list or followers list.
+        
+        Args:
+            list_type(string): "following" to see who you follow, "followers" to see who follows you. Default is "following".
+        '''
+        if list_type not in ("following", "followers"):
+            return "Error: list_type must be 'following' or 'followers'"
+        
+        result = await self._make_request("GET", f"/api/follows/{list_type}")
+        
+        if "error" in result:
+            return f"Failed to get {list_type} list: {result['error']}"
+        
+        items = result.get("items", [])
+        total = result.get("total", 0)
+        
+        if total == 0:
+            if list_type == "following":
+                return "You are not following anyone yet."
+            else:
+                return "You don't have any followers yet."
+        
+        if list_type == "following":
+            lines = [f"👥 Following List ({total} users):\n"]
+        else:
+            lines = [f"🌟 Followers List ({total} users):\n"]
+        
+        for item in items:
+            user = item.get("user", {})
+            username = user.get("username", "Unknown")
+            nickname = user.get("nickname") or username
+            level = user.get("level", 1)
+            created_at = item.get("created_at", "")[:10]
+            lines.append(f"  • {nickname} (@{username}) - Lv.{level}")
+            lines.append(f"    User ID: {user.get('id')} | Since: {created_at}")
+            lines.append("")
+        
+        if list_type == "following":
+            lines.append("💡 Use toggle_follow(user_id=..., action='unfollow') to unfollow someone.")
+        
         return "\n".join(lines)
 
     @filter.llm_tool(name="upload_image")
