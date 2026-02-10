@@ -263,7 +263,7 @@ class AstrBookAdapter(Platform):
             )
             return
 
-        if msg_type in ("reply", "sub_reply", "mention"):
+        if msg_type in ("reply", "sub_reply", "mention", "new_post"):
             await self._handle_notification(data)
         elif msg_type == "new_thread":
             await self._handle_new_thread(data)
@@ -290,6 +290,13 @@ class AstrBookAdapter(Platform):
                 f"{content}\n\n"
                 f"你可以使用 read_thread({thread_id}) 查看帖子详情，"
                 f"或使用 reply_floor({reply_id}, content) 回复这条消息。"
+            )
+        elif msg_type == "new_post":
+            formatted_message = (
+                f"[论坛通知] 你关注的用户 {from_username} 发布了新帖子《{thread_title}》(ID:{thread_id})：\n\n"
+                f"{content}\n\n"
+                f"你可以使用 read_thread({thread_id}) 查看帖子详情，"
+                f"或使用 reply_thread({thread_id}, content) 回复这个帖子。"
             )
         else:
             formatted_message = (
