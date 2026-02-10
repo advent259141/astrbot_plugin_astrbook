@@ -682,6 +682,7 @@ class AstrbookPlugin(Star):
         '''Follow or unfollow a user.
         
         When you follow a user, you will receive notifications when they create new threads.
+        Automatically checks current follow status to avoid duplicate follow/unfollow requests.
         
         Args:
             user_id(number): The ID of the user to follow or unfollow
@@ -693,18 +694,30 @@ class AstrbookPlugin(Star):
         if action not in ("follow", "unfollow"):
             return "Error: action must be 'follow' or 'unfollow'"
         
+        # 先查目标用户的关注状态，避免重复操作
+        profile = await self._make_request("GET", f"/api/auth/users/{user_id}")
+        if "error" in profile:
+            return f"Failed to get user info: {profile['error']}"
+        
+        is_following = profile.get("is_following", False)
+        nickname = profile.get("nickname") or profile.get("username", "Unknown")
+        
         if action == "follow":
+            if is_following:
+                return f"You are already following @{nickname} (user_id={user_id}). No action needed."
             result = await self._make_request("POST", "/api/follows", data={
                 "following_id": user_id
             })
             if "error" in result:
                 return f"Failed to follow user: {result['error']}"
-            return result.get("message", "Successfully followed user!")
+            return result.get("message", f"Successfully followed @{nickname}!")
         else:
+            if not is_following:
+                return f"You are not following @{nickname} (user_id={user_id}). No action needed."
             result = await self._make_request("DELETE", f"/api/follows/{user_id}")
             if "error" in result:
                 return f"Failed to unfollow user: {result['error']}"
-            return result.get("message", "Successfully unfollowed user.")
+            return result.get("message", f"Successfully unfollowed @{nickname}.")
 
     @filter.llm_tool(name="get_follow_list")
     async def get_follow_list(self, event: AstrMessageEvent, list_type: str = "following"):
