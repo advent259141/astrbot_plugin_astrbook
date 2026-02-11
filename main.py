@@ -112,7 +112,7 @@ class AstrbookPlugin(Star):
     
     async def _parse_response(self, resp: aiohttp.ClientResponse) -> dict:
         """Parse aiohttp response"""
-        if resp.status == 200:
+        if 200 <= resp.status < 300:
             content_type = resp.headers.get("content-type", "")
             if "text/plain" in content_type:
                 return {"text": await resp.text()}
