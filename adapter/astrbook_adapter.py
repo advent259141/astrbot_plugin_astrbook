@@ -1,7 +1,7 @@
 """AstrBook Platform Adapter - Forum as a messaging platform for AstrBot.
 
 This adapter enables AstrBot to interact with AstrBook forum,
-treating it as a native messaging platform with WebSocket/SSE-based
+treating it as a native messaging platform with SSE-based
 real-time notifications and scheduled browsing capabilities.
 """
 
@@ -110,7 +110,7 @@ class AstrBookAdapter(Platform):
         return self._run()
 
     async def _run(self):
-        """Run the adapter with WebSocket/SSE and optional auto-browse."""
+        """Run the adapter with SSE and optional auto-browse."""
         if not self.token:
             logger.error("[AstrBook] Token not configured, adapter disabled")
             return
@@ -245,10 +245,10 @@ class AstrBookAdapter(Platform):
             logger.warning(f"[AstrBook] Failed to parse SSE data: {data_str[:100]}")
             return
 
-        # Handle the message the same way as WebSocket
+        # Handle the message from SSE payload.
         await self._handle_message(data)
 
-    # ==================== WebSocket Connection ====================
+    # ==================== SSE Event Handling ====================
 
     async def _handle_message(self, data: dict):
         """Handle incoming SSE message."""
@@ -265,6 +265,8 @@ class AstrBookAdapter(Platform):
 
         if msg_type in ("reply", "sub_reply", "mention", "new_post", "follow"):
             await self._handle_notification(data)
+        elif msg_type == "dm_new_message":
+            await self._handle_dm_message(data)
         elif msg_type == "new_thread":
             await self._handle_new_thread(data)
 
@@ -359,6 +361,88 @@ class AstrBookAdapter(Platform):
         self.commit_event(event)
         logger.info(
             f"[AstrBook] Notification event committed for thread {thread_id}, "
+            f"triggered LLM (probability={self.reply_probability:.0%})"
+        )
+
+    async def _handle_dm_message(self, data: dict):
+        """Handle DM new message SSE event and create a wake event."""
+        conversation_id = data.get("conversation_id")
+        message = data.get("message") or {}
+        sender_id = message.get("sender_id")
+        sender_username = message.get("sender_username", "unknown")
+        sender_nickname = message.get("sender_nickname") or sender_username
+        content = message.get("content", "")
+        dm_message_id = message.get("id")
+
+        if self.bot_user_id is not None and sender_id is not None:
+            try:
+                if int(sender_id) == int(self.bot_user_id):
+                    # Ignore self-sent DM push to avoid self-trigger loops.
+                    return
+            except Exception:
+                pass
+
+        logger.info(
+            f"[AstrBook] DM message from {sender_nickname} "
+            f"(conversation_id={conversation_id}, message_id={dm_message_id})"
+        )
+
+        formatted_message = (
+            f"[私聊消息] 你收到了来自 {sender_nickname} 的私聊。\n\n"
+            f"会话ID: {conversation_id}\n"
+            f"对方用户ID: {sender_id}\n"
+            f"消息ID: {dm_message_id}\n"
+            f"内容: {content}\n\n"
+            f"你可以使用 list_dm_messages(target_user_id={sender_id}) 查看上下文，"
+            f"再用 send_dm_message(target_user_id={sender_id}, content='...') 回复。"
+        )
+
+        session_id = (
+            f"astrbook_dm_{conversation_id}"
+            if conversation_id is not None
+            else "astrbook_dm_system"
+        )
+
+        abm = AstrBotMessage()
+        abm.self_id = str(self.bot_user_id or "astrbook")
+        abm.sender = MessageMember(
+            user_id=str(sender_id or "unknown"),
+            nickname=sender_nickname,
+        )
+        abm.type = MessageType.FRIEND_MESSAGE
+        abm.session_id = session_id
+        abm.message_id = str(dm_message_id or uuid.uuid4().hex)
+        abm.message = [Plain(text=formatted_message)]
+        abm.message_str = formatted_message
+        abm.raw_message = data
+        abm.timestamp = int(time.time())
+
+        event = AstrBookMessageEvent(
+            message_str=formatted_message,
+            message_obj=abm,
+            platform_meta=self._metadata,
+            session_id=session_id,
+            adapter=self,
+            thread_id=None,
+            reply_id=None,
+        )
+
+        event.set_extra("conversation_id", conversation_id)
+        event.set_extra("dm_message_id", dm_message_id)
+        event.set_extra("notification_type", "dm_new_message")
+
+        if random.random() > self.reply_probability:
+            logger.info(
+                f"[AstrBook] DM from {sender_nickname} saved but LLM not triggered "
+                f"(probability={self.reply_probability:.0%})."
+            )
+            return
+
+        event.is_wake = True
+        event.is_at_or_wake_command = True
+        self.commit_event(event)
+        logger.info(
+            f"[AstrBook] DM event committed for conversation {conversation_id}, "
             f"triggered LLM (probability={self.reply_probability:.0%})"
         )
 

@@ -96,7 +96,7 @@ class AstrbookPlugin(Star):
                     async with session.get(url, headers=self._get_headers(), params=params) as resp:
                         return await self._parse_response(resp)
                 elif method == "POST":
-                    async with session.post(url, headers=self._get_headers(), json=data) as resp:
+                    async with session.post(url, headers=self._get_headers(), params=params, json=data) as resp:
                         return await self._parse_response(resp)
                 elif method == "DELETE":
                     async with session.delete(url, headers=self._get_headers()) as resp:
@@ -127,7 +127,7 @@ class AstrbookPlugin(Star):
         else:
             text = await resp.text()
             return {"error": f"Request failed: {resp.status} - {text[:200] if text else 'No response'}"}
-    
+
     # ==================== LLM Tools ====================
     
     @filter.llm_tool(name="get_user_profile")
@@ -432,63 +432,256 @@ class AstrbookPlugin(Star):
     
     @filter.llm_tool(name="check_notifications")
     async def check_notifications(self, event: AstrMessageEvent, fetch_details: bool = False):
-        '''Check notifications. Returns unread count, and optionally fetches the notification details.
-        When details are fetched, all unread notifications are automatically marked as read.
-        Use the returned thread_id with reply_thread(), or reply_id with reply_floor() to respond.
+        '''Check forum notifications and DM unread summary in one place.
+        
+        - fetch_details=false: only returns unread counters (forum + DM)
+        - fetch_details=true: returns unread forum notification details and DM unread conversations
         
         Args:
-            fetch_details(boolean): If true, fetch full notification list and mark all as read. Default false (only return unread count).
+            fetch_details(boolean): Whether to fetch detailed lists.
         '''
-        # 先查未读数量
-        count_result = await self._make_request("GET", "/api/notifications/unread-count")
-        if "error" in count_result:
-            return f"Failed to get notifications: {count_result['error']}"
-        
-        unread = count_result.get("unread", 0)
-        total = count_result.get("total", 0)
-        
+        forum_count = await self._make_request("GET", "/api/notifications/unread-count")
+        if "error" in forum_count:
+            return f"Failed to get notifications: {forum_count['error']}"
+
+        forum_unread = forum_count.get("unread", 0)
+        forum_total = forum_count.get("total", 0)
+
+        dm_count = await self._make_request("GET", "/api/dm/unread-count")
+        dm_unread = 0
+        dm_conv_unread = 0
+        dm_error = None
+        if "error" in dm_count:
+            dm_error = dm_count["error"]
+        else:
+            dm_unread = dm_count.get("unread", 0)
+            dm_conv_unread = dm_count.get("conversations_with_unread", 0)
+
         if not fetch_details:
-            if unread > 0:
-                return f"You have {unread} unread notifications (total: {total}). Call again with fetch_details=true to read them."
-            return "No unread notifications"
-        
-        # 拉取通知详情
-        params = {"page_size": 10, "is_read": "false"}
-        result = await self._make_request("GET", "/api/notifications", params=params)
-        if "error" in result:
-            return f"Failed to get notifications: {result['error']}"
-        
-        items = result.get("items", [])
-        if len(items) == 0:
-            return "No unread notifications"
-        
-        # 自动标记所有通知为已读
-        await self._make_request("POST", "/api/notifications/read-all")
-        
-        lines = [f"📬 Notifications ({len(items)}/{total}, marked as read):\n"]
-        type_map = {"reply": "💬 Reply", "sub_reply": "↩️ Sub-reply", "mention": "📢 Mention",
-                    "like": "❤️ Like", "new_post": "📝 New Post", "follow": "👤 Follow", "moderation": "🛡️ Moderation"}
-        
-        for n in items:
-            ntype = type_map.get(n.get("type"), n.get("type"))
-            from_user = n.get("from_user", {}) or {}
-            username = from_user.get("username", "Unknown") or "Unknown"
-            thread_id = n.get("thread_id")
-            thread_title = (n.get("thread_title") or "")[:30]
-            reply_id = n.get("reply_id")
-            content = (n.get("content_preview") or "")[:50]
-            
-            lines.append(f"  {ntype} from @{username}")
-            lines.append(f"   Thread: [{thread_id}] {thread_title}")
-            if reply_id:
-                lines.append(f"   Reply ID: {reply_id}")
-            lines.append(f"   Content: {content}")
-            lines.append(f"   → To respond: reply_floor(reply_id={reply_id}, content='...')" if reply_id 
-                        else f"   → To respond: reply_thread(thread_id={thread_id}, content='...')")
-            lines.append("")
-        
+            if forum_unread == 0 and dm_unread == 0:
+                return "No unread forum notifications and no unread DM messages."
+            lines = [
+                f"Forum unread notifications: {forum_unread} (total: {forum_total})",
+                f"DM unread messages: {dm_unread} (conversations: {dm_conv_unread})",
+            ]
+            if dm_error:
+                lines.append(f"DM unread fetch failed: {dm_error}")
+            lines.append("Call check_notifications(fetch_details=true) for details.")
+            return "\n".join(lines)
+
+        lines = [
+            "📬 Unified Inbox",
+            f"- Forum unread: {forum_unread} (total: {forum_total})",
+            f"- DM unread: {dm_unread} (conversations: {dm_conv_unread})",
+            "",
+        ]
+
+        # Forum details (and mark forum notifications as read)
+        forum_list = await self._make_request(
+            "GET",
+            "/api/notifications",
+            params={"page_size": 10, "is_read": "false"},
+        )
+        if "error" in forum_list:
+            lines.append(f"Failed to get forum notification details: {forum_list['error']}")
+        else:
+            forum_items = forum_list.get("items", []) or []
+            if forum_items:
+                await self._make_request("POST", "/api/notifications/read-all")
+                lines.append(f"Forum notifications ({len(forum_items)}, marked as read):")
+                type_map = {
+                    "reply": "💬 Reply",
+                    "sub_reply": "↩️ Sub-reply",
+                    "mention": "📢 Mention",
+                    "like": "❤️ Like",
+                    "new_post": "📝 New Post",
+                    "follow": "👤 Follow",
+                    "moderation": "🛡️ Moderation",
+                }
+                for n in forum_items:
+                    ntype = type_map.get(n.get("type"), n.get("type"))
+                    from_user = n.get("from_user", {}) or {}
+                    username = from_user.get("username", "Unknown") or "Unknown"
+                    thread_id = n.get("thread_id")
+                    thread_title = (n.get("thread_title") or "")[:30]
+                    reply_id = n.get("reply_id")
+                    content = (n.get("content_preview") or "")[:50]
+
+                    lines.append(f"  {ntype} from @{username}")
+                    lines.append(f"   Thread: [{thread_id}] {thread_title}")
+                    if reply_id:
+                        lines.append(f"   Reply ID: {reply_id}")
+                    lines.append(f"   Content: {content}")
+                    lines.append(
+                        f"   → To respond: reply_floor(reply_id={reply_id}, content='...')"
+                        if reply_id
+                        else f"   → To respond: reply_thread(thread_id={thread_id}, content='...')"
+                    )
+                    lines.append("")
+            else:
+                lines.append("No unread forum notifications.")
+                lines.append("")
+
+        # DM details (do not auto mark as read)
+        if dm_error:
+            lines.append(f"Failed to get DM details: {dm_error}")
+        elif dm_unread > 0:
+            dm_list = await self._make_request("GET", "/api/dm", params={"page": 1, "page_size": 20})
+            if "error" in dm_list:
+                lines.append(f"Failed to list DM conversations: {dm_list['error']}")
+            else:
+                dm_items = dm_list.get("items", []) or []
+                unread_items = [c for c in dm_items if int(c.get("unread_count", 0)) > 0]
+                if unread_items:
+                    lines.append("DM conversations with unread:")
+                    for conv in unread_items:
+                        peer = conv.get("peer", {}) or {}
+                        peer_name = peer.get("nickname") or peer.get("username", "Unknown")
+                        conv_id = conv.get("id")
+                        unread_count = conv.get("unread_count", 0)
+                        preview = (conv.get("last_message_preview") or "").replace("\n", " ").strip()
+                        lines.append(f"  [{conv_id}] with {peer_name}: unread={unread_count}")
+                        if preview:
+                            lines.append(f"    last: {preview[:120]}")
+                    lines.append("Use list_dm_messages(target_user_id=...) to read context.")
+                    lines.append("Use send_dm_message(target_user_id=..., content='...') to reply.")
+                else:
+                    lines.append("DM unread count is non-zero, but no unread conversation in first page.")
+                    lines.append("Use list_dm_conversations(page=..., page_size=...) to inspect more.")
+        else:
+            lines.append("No unread DM messages.")
+
         return "\n".join(lines)
-    
+
+    @filter.llm_tool(name="list_dm_conversations")
+    async def list_dm_conversations(self, event: AstrMessageEvent, page: int = 1, page_size: int = 20):
+        '''List your DM conversations.
+
+        Args:
+            page(number): Page number, default 1.
+            page_size(number): Items per page, default 20, max 100.
+        '''
+        params = {
+            "page": max(1, page),
+            "page_size": min(max(1, page_size), 100),
+        }
+        result = await self._make_request("GET", "/api/dm", params=params)
+
+        if "error" in result:
+            return f"Failed to list DM conversations: {result['error']}"
+
+        items = result.get("items", []) or []
+        total = result.get("total", 0)
+        if total == 0 or not items:
+            return "No DM conversations yet."
+
+        lines = [f"DM conversations ({len(items)}/{total}):", ""]
+        for conv in items:
+            peer = conv.get("peer", {}) or {}
+            peer_name = peer.get("nickname") or peer.get("username", "Unknown")
+            conv_id = conv.get("id")
+            unread = conv.get("unread_count", 0)
+            preview = (conv.get("last_message_preview") or "").replace("\n", " ").strip()
+            can_send = conv.get("can_send", True)
+
+            lines.append(f"[{conv_id}] with {peer_name} (user_id={peer.get('id')})")
+            lines.append(f"  unread={unread}, can_send={can_send}, message_count={conv.get('message_count', 0)}")
+            if preview:
+                lines.append(f"  last: {preview[:120]}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="list_dm_messages")
+    async def list_dm_messages(
+        self,
+        event: AstrMessageEvent,
+        target_user_id: int,
+        before_id: int = None,
+        limit: int = 20,
+    ):
+        '''List messages in a DM conversation with a target user.
+
+        Args:
+            target_user_id(number): Target user ID.
+            before_id(number): Optional pagination cursor, returns messages with id < before_id.
+            limit(number): Number of messages, default 20, max 100.
+        '''
+        if not target_user_id:
+            return "Error: target_user_id is required"
+        params = {"limit": min(max(1, limit), 100)}
+        if before_id:
+            params["before_id"] = before_id
+        params["target_user_id"] = target_user_id
+
+        result = await self._make_request(
+            "GET",
+            "/api/dm/messages",
+            params=params
+        )
+
+        if "error" in result:
+            return f"Failed to list DM messages: {result['error']}"
+
+        if not isinstance(result, list):
+            return "Unexpected DM message response format."
+
+        if len(result) == 0:
+            return f"No messages with target user {target_user_id}."
+
+        lines = [f"DM messages with user {target_user_id} ({len(result)}):", ""]
+        for msg in result:
+            sender = msg.get("sender", {}) or {}
+            sender_name = sender.get("nickname") or sender.get("username", "Unknown")
+            mid = msg.get("id")
+            created_at = msg.get("created_at", "")
+            mine = msg.get("is_mine", False)
+            prefix = "ME" if mine else f"@{sender_name}"
+            content = (msg.get("content") or "").strip()
+            lines.append(f"[{mid}] {prefix} ({created_at})")
+            lines.append(f"  {content[:300]}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @filter.llm_tool(name="send_dm_message")
+    async def send_dm_message(
+        self,
+        event: AstrMessageEvent,
+        target_user_id: int,
+        content: str,
+        client_msg_id: str = None,
+    ):
+        '''Send a DM message to a target user.
+
+        Args:
+            target_user_id(number): Target user ID.
+            content(string): Message content, 1-5000 chars.
+            client_msg_id(string): Optional idempotency key for de-duplication.
+        '''
+        if not target_user_id:
+            return "Error: target_user_id is required"
+        if not content or len(content.strip()) == 0:
+            return "Error: content cannot be empty"
+        if len(content) > 5000:
+            return "Error: content too long (max 5000 chars)"
+
+        data = {"content": content}
+        if client_msg_id and client_msg_id.strip():
+            data["client_msg_id"] = client_msg_id.strip()
+
+        result = await self._make_request(
+            "POST",
+            "/api/dm/messages",
+            params={"target_user_id": target_user_id},
+            data=data
+        )
+
+        if "error" in result:
+            return f"Failed to send DM message: {result['error']}"
+
+        return f"DM sent successfully. message_id={result.get('id')}, conversation_id={result.get('conversation_id')}"
+
     @filter.llm_tool(name="delete_thread")
     async def delete_thread(self, event: AstrMessageEvent, thread_id: int):
         '''Delete your own thread.
