@@ -159,25 +159,55 @@ class AstrBookAdapter(Platform):
     async def _sse_loop(self):
         """SSE connection loop with auto-reconnect."""
         reconnect_delay = self._reconnect_delay
+        consecutive_auth_failures = 0  # ✅ 记录连续认证失败次数
 
         while True:
             try:
-                await self._sse_connect()
+                auth_failed = await self._sse_connect()
+                if auth_failed:
+                    consecutive_auth_failures += 1
+                    # ✅ 认证失败时增加等待时间，避免无效重试
+                    if consecutive_auth_failures >= 3:
+                        logger.error(
+                            "[AstrBook] SSE authentication failed 3 times consecutively, "
+                            "please check your token. Waiting 5 minutes before retry..."
+                        )
+                        await asyncio.sleep(300)  # 5 分钟后重试
+                        consecutive_auth_failures = 0
+                    else:
+                        logger.warning(
+                            f"[AstrBook] SSE authentication failed ({consecutive_auth_failures}/3), "
+                            f"retrying in {reconnect_delay}s..."
+                        )
+                else:
+                    consecutive_auth_failures = 0  # ✅ 重置计数器
                 reconnect_delay = self._reconnect_delay
             except aiohttp.ClientError as e:
                 logger.error(f"[AstrBook] SSE connection error: {e}")
+                consecutive_auth_failures = 0
             except Exception as e:
                 logger.error(f"[AstrBook] Unexpected error in SSE loop: {e}")
+                consecutive_auth_failures = 0
 
             self._connected = False
-            logger.info(f"[AstrBook] SSE reconnecting in {reconnect_delay}s...")
+            if consecutive_auth_failures == 0:  # ✅ 非认证失败才显示普通重连信息
+                logger.info(f"[AstrBook] SSE reconnecting in {reconnect_delay}s...")
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, self._max_reconnect_delay)
 
-    async def _sse_connect(self):
-        """Establish SSE connection."""
+    async def _sse_connect(self) -> bool:
+        """Establish SSE connection.
+        
+        Returns:
+            bool: True if authentication failed (401), False otherwise.
+        """
         # Build SSE URL from api_base
         sse_url = f"{self.api_base}/sse/bot?token={self.token}"
+
+        # ✅ 先关闭旧的 session，避免连接泄漏
+        if self._sse_session and not self._sse_session.closed:
+            await self._sse_session.close()
+            logger.debug("[AstrBook] Closed previous SSE session before reconnecting")
 
         session = aiohttp.ClientSession()
         self._sse_session = session
@@ -191,11 +221,11 @@ class AstrBookAdapter(Platform):
             ) as resp:
                 if resp.status == 401:
                     logger.error("[AstrBook] SSE authentication failed: invalid or expired token")
-                    return
+                    return True  # ✅ 返回认证失败标志
 
                 if resp.status != 200:
                     logger.error(f"[AstrBook] SSE connection failed with status {resp.status}")
-                    return
+                    return False
 
                 self._connected = True
                 logger.info("[AstrBook] SSE connected successfully")
@@ -218,6 +248,8 @@ class AstrBookAdapter(Platform):
             self._connected = False
             if not session.closed:
                 await session.close()
+        
+        return False  # ✅ 连接正常断开（非认证失败）
 
     async def _parse_sse_block(self, block: str):
         """Parse a single SSE message block."""
