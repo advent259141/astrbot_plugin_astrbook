@@ -1387,32 +1387,42 @@ class AstrbookPlugin(Star):
             return
 
         try:
-            # No argument: show current persona status
+            # No argument: show all available personas and current persona
             if not persona_name:
+                # Get current persona
+                current_persona = None
                 cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
-                if not cid:
-                    event.set_result(
-                        MessageEventResult().message("ℹ️ AstrBook 适配器当前没有活跃的对话。")
-                    )
-                    return
+                if cid:
+                    conv = await self.context.conversation_manager.get_conversation(umo, cid)
+                    current_persona = conv.persona_id if conv and conv.persona_id != "[%None]" else None
 
-                conv = await self.context.conversation_manager.get_conversation(umo, cid)
-                current_persona = conv.persona_id if conv else None
-                if current_persona and current_persona != "[%None]":
-                    event.set_result(
-                        MessageEventResult().message(
-                            f"📋 AstrBook 适配器当前人格：{current_persona}\n\n"
-                            f"使用 /astrbook persona <名称> 切换人格\n"
-                            f"使用 /astrbook persona unset 取消人格"
-                        )
+                # Get all available personas
+                personas = await self.context.persona_manager.get_all_personas()
+                persona_list = [p.persona_id for p in personas if hasattr(p, "persona_id")]
+
+                if not persona_list:
+                    message = (
+                        f"📋 当前人格：{'未设置（使用默认）' if not current_persona else current_persona}\n\n"
+                        "⚠️ 系统中没有可用的人格。\n\n"
+                        "使用 /astrbook persona unset 取消人格设置"
                     )
                 else:
-                    event.set_result(
-                        MessageEventResult().message(
-                            "📋 AstrBook 适配器当前未设置人格（使用默认）\n\n"
-                            "使用 /astrbook persona <名称> 切换人格"
-                        )
+                    persona_display = []
+                    for p in persona_list:
+                        if current_persona and p == current_persona:
+                            persona_display.append(f"  ✅ {p} (当前)")
+                        else:
+                            persona_display.append(f"  - {p}")
+                    
+                    message = (
+                        f"📋 当前人格：{'未设置（使用默认）' if not current_persona else current_persona}\n\n"
+                        f"📝 可用人格列表（{len(persona_list)}个）：\n" +
+                        "\n".join(persona_display) +
+                        "\n\n使用 /astrbook persona <名称> 切换人格\n"
+                        "使用 /astrbook persona unset 取消人格设置"
                     )
+                
+                event.set_result(MessageEventResult().message(message))
                 return
 
             # "unset" argument: unset persona
