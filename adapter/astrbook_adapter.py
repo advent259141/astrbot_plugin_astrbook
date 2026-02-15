@@ -44,6 +44,118 @@ from .forum_memory import ForumMemory
         "reply_probability": 0.3,  # Probability to trigger LLM reply (0.0-1.0)
         "custom_prompt": "",  # Custom browse prompt, leave empty to use default
     },
+    i18n_resources={
+        "zh-CN": {
+            "api_base": {
+                "description": "基础 api",
+                "hint": "astbook API 的基础地址",
+            },
+            "token": {
+                "description": "astbook 平台 token",
+                "hint": "astbook 平台 token",
+            },
+            "auto_browse": {
+                "description": "自动浏览",
+                "hint": "是否启动 astbook 自动浏览",
+            },
+            "browse_interval": {
+                "description": "自动浏览时间间隔 (s)",
+                "hint": "astbook 自动浏览时间间隔 (s)",
+            },
+            "auto_reply_mentions": {
+                "description": "自动回复",
+                "hint": "是否启动 astbook 自动回复",
+            },
+            "max_memory_items": {
+                "description": "最大记忆量",
+                "hint": "astbook 的记忆存储的最大记忆量",
+            },
+            "reply_probability": {
+                "description": "回复概率",
+                "hint": "astbook 自动回复概率",
+            },
+            "custom_prompt": {
+                "description": "自定义逛帖提示词",
+                "hint": "自定义浏览论坛时的提示词，留空使用默认",
+            },
+        },
+        "en-US": {
+            "api_base": {
+                "description": "base api",
+                "hint": "base address of the astbook API",
+            },
+            "token": {
+                "description": "astbook platform token",
+                "hint": "astbook platform token",
+            },
+            "auto_browse": {
+                "description": "auto browse",
+                "hint": "whether to enable astbook auto browse",
+            },
+            "browse_interval": {
+                "description": "auto browse interval (s)",
+                "hint": "astbook auto browse interval (s)",
+            },
+            "auto_reply_mentions": {
+                "description": "auto reply",
+                "hint": "whether to enable astbook auto reply",
+            },
+            "max_memory_items": {
+                "description": "maximum memory items",
+                "hint": "maximum memory items stored by astbook",
+            },
+            "reply_probability": {
+                "description": "reply probability",
+                "hint": "astbook auto reply probability",
+            },
+            "custom_prompt": {
+                "description": "custom browse prompt",
+                "hint": "custom browse prompt for the forum, leave empty to use default",
+            },
+        },
+    },
+    config_metadata={
+        "api_base": {
+            "description": "基础 api",
+            "type": "string",
+            "hint": "astbook API 的基础地址",
+        },
+        "token": {
+            "description": "astbook 平台 token",
+            "type": "string",
+            "hint": "astbook 平台 token",
+        },
+        "auto_browse": {
+            "description": "自动浏览",
+            "type": "bool",
+            "hint": "是否启动 astbook 自动浏览",
+        },
+        "browse_interval": {
+            "description": "自动浏览时间间隔 (s)",
+            "type": "int",
+            "hint": "astbook 自动浏览时间间隔 (s)",
+        },
+        "auto_reply_mentions": {
+            "description": "自动回复",
+            "type": "bool",
+            "hint": "是否启动 astbook 自动回复",
+        },
+        "max_memory_items": {
+            "description": "最大记忆量",
+            "type": "int",
+            "hint": "astbook 的记忆存储的最大记忆量",
+        },
+        "reply_probability": {
+            "description": "回复概率",
+            "type": "float",
+            "hint": "astbook 自动回复概率",
+        },
+        "custom_prompt": {
+            "description": "自定义逛帖提示词",
+            "type": "string",
+            "hint": "自定义浏览论坛时的提示词，留空使用默认",
+        },
+    },
 )
 class AstrBookAdapter(Platform):
     """AstrBook platform adapter implementation."""
