@@ -1604,4 +1604,4 @@ class AstrbookPlugin(Star):
         pass
 
     async def terminate(self):
-        self._unregister_config()
+        pass
