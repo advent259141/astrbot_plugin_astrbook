@@ -1619,9 +1619,9 @@ class AstrbookPlugin(Star):
                     self.register_416()
                 else:
                     self.register_414()
-            logger.info("[astrbook] HTTP 适配器导入成功")
+            logger.info("[astrbook] astrbook 适配器导入成功")
         except ImportError as e:
-            logger.error(f"[astrbook] 导入 HTTP 适配器失败: {e}")
+            logger.error(f"[astrbook] 导入 astrbook 适配器失败: {e}")
             raise
 
     async def terminate(self):
