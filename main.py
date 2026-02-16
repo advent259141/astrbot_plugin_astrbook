@@ -1619,10 +1619,9 @@ class AstrbookPlugin(Star):
                     self.register_416()
                 else:
                     self.register_414()
-            self._http_adapter_cls = HTTPAdapter
-            logger.info("[HTTPAdapter] HTTP 适配器导入成功")
+            logger.info("[astrbook] HTTP 适配器导入成功")
         except ImportError as e:
-            logger.error(f"[HTTPAdapter] 导入 HTTP 适配器失败: {e}")
+            logger.error(f"[astrbook] 导入 HTTP 适配器失败: {e}")
             raise
 
     async def terminate(self):
