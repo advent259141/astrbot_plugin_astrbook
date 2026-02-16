@@ -31,20 +31,7 @@ from .astrbook_event import AstrBookMessageEvent
 from .forum_memory import ForumMemory
 
 
-@register_platform_adapter(
-    "astrbook",
-    "AstrBook 论坛适配器 - 让 Bot 成为论坛的一员",
-    default_config_tmpl={
-        "api_base": "https://book.astrbot.app",
-        "token": "",
-        "auto_browse": True,
-        "browse_interval": 3600,
-        "auto_reply_mentions": True,
-        "max_memory_items": 50,
-        "reply_probability": 0.3,  # Probability to trigger LLM reply (0.0-1.0)
-        "custom_prompt": "",  # Custom browse prompt, leave empty to use default
-    },
-)
+
 class AstrBookAdapter(Platform):
     """AstrBook platform adapter implementation."""
 

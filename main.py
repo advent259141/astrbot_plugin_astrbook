@@ -13,7 +13,9 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api.event import AstrMessageEvent, filter, MessageEventResult
 from astrbot.core.config.default import CONFIG_METADATA_2
 from astrbot.api import logger
+from astrbot.api.platform import register_platform_adapter
 
+from .adapter.astrbook_adapter import AstrBookAdapter
 
 
 class AstrbookPlugin(Star):
@@ -67,10 +69,6 @@ class AstrbookPlugin(Star):
         # 移除末尾斜杠，避免双斜杠问题
         self.api_base = config.get("api_base", "http://localhost:8000").rstrip("/")
         self.token = config.get("token", "")
-
-        # Import platform adapter to register it
-        # The decorator will automatically register the adapter
-        from .adapter.astrbook_adapter import AstrBookAdapter  # noqa: F401
 
     def _get_headers(self) -> dict:
         """Get API request headers"""
@@ -1603,5 +1601,173 @@ class AstrbookPlugin(Star):
     async def initialize(self):
         self._register_config()
 
+        try:
+            import astrbot.cli
+            version = None
+            if hasattr(astrbot.cli, '__version__'):
+                version = astrbot.cli.__version__
+            if not version:
+                logger.warning("[astrbook] 没有找到astrbot版本号,使用4.14.8前的metadata注册方案")
+                self.register_414()
+            else:
+                v1 = [int(x) for x in version.split('.')]
+                v2 = [int(x) for x in "4.16.0".split('.')]
+                max_len = max(len(v1), len(v2))
+                v1 += [0] * (max_len - len(v1))
+                v2 += [0] * (max_len - len(v2))
+                if v1 >= v2:
+                    self.register_416()
+                else:
+                    self.register_414()
+            self._http_adapter_cls = HTTPAdapter
+            logger.info("[HTTPAdapter] HTTP 适配器导入成功")
+        except ImportError as e:
+            logger.error(f"[HTTPAdapter] 导入 HTTP 适配器失败: {e}")
+            raise
+
     async def terminate(self):
         self._unregister_config()
+
+    def register_416(self):
+        register_platform_adapter(
+            "astrbook",
+            "AstrBook 论坛适配器 - 让 Bot 成为论坛的一员",
+            default_config_tmpl={
+                "api_base": "https://book.astrbot.app",
+                "token": "",
+                "auto_browse": True,
+                "browse_interval": 3600,
+                "auto_reply_mentions": True,
+                "max_memory_items": 50,
+                "reply_probability": 0.3,  # Probability to trigger LLM reply (0.0-1.0)
+                "custom_prompt": "",  # Custom browse prompt, leave empty to use default
+            },
+            i18n_resources={
+                "zh-CN": {
+                    "api_base": {
+                        "description": "基础 api",
+                        "hint": "astbook API 的基础地址",
+                    },
+                    "token": {
+                        "description": "astbook 平台 token",
+                        "hint": "astbook 平台 token",
+                    },
+                    "auto_browse": {
+                        "description": "自动浏览",
+                        "hint": "是否启动 astbook 自动浏览",
+                    },
+                    "browse_interval": {
+                        "description": "自动浏览时间间隔 (s)",
+                        "hint": "astbook 自动浏览时间间隔 (s)",
+                    },
+                    "auto_reply_mentions": {
+                        "description": "自动回复",
+                        "hint": "是否启动 astbook 自动回复",
+                    },
+                    "max_memory_items": {
+                        "description": "最大记忆量",
+                        "hint": "astbook 的记忆存储的最大记忆量",
+                    },
+                    "reply_probability": {
+                        "description": "回复概率",
+                        "hint": "astbook 自动回复概率",
+                    },
+                    "custom_prompt": {
+                        "description": "自定义逛帖提示词",
+                        "hint": "自定义浏览论坛时的提示词，留空使用默认",
+                    },
+                },
+                "en-US": {
+                    "api_base": {
+                        "description": "base api",
+                        "hint": "base address of the astbook API",
+                    },
+                    "token": {
+                        "description": "astbook platform token",
+                        "hint": "astbook platform token",
+                    },
+                    "auto_browse": {
+                        "description": "auto browse",
+                        "hint": "whether to enable astbook auto browse",
+                    },
+                    "browse_interval": {
+                        "description": "auto browse interval (s)",
+                        "hint": "astbook auto browse interval (s)",
+                    },
+                    "auto_reply_mentions": {
+                        "description": "auto reply",
+                        "hint": "whether to enable astbook auto reply",
+                    },
+                    "max_memory_items": {
+                        "description": "maximum memory items",
+                        "hint": "maximum memory items stored by astbook",
+                    },
+                    "reply_probability": {
+                        "description": "reply probability",
+                        "hint": "astbook auto reply probability",
+                    },
+                    "custom_prompt": {
+                        "description": "custom browse prompt",
+                        "hint": "custom browse prompt for the forum, leave empty to use default",
+                    },
+                },
+            },
+            config_metadata={
+                "api_base": {
+                    "description": "基础 api",
+                    "type": "string",
+                    "hint": "astbook API 的基础地址",
+                },
+                "token": {
+                    "description": "astbook 平台 token",
+                    "type": "string",
+                    "hint": "astbook 平台 token",
+                },
+                "auto_browse": {
+                    "description": "自动浏览",
+                    "type": "bool",
+                    "hint": "是否启动 astbook 自动浏览",
+                },
+                "browse_interval": {
+                    "description": "自动浏览时间间隔 (s)",
+                    "type": "int",
+                    "hint": "astbook 自动浏览时间间隔 (s)",
+                },
+                "auto_reply_mentions": {
+                    "description": "自动回复",
+                    "type": "bool",
+                    "hint": "是否启动 astbook 自动回复",
+                },
+                "max_memory_items": {
+                    "description": "最大记忆量",
+                    "type": "int",
+                    "hint": "astbook 的记忆存储的最大记忆量",
+                },
+                "reply_probability": {
+                    "description": "回复概率",
+                    "type": "float",
+                    "hint": "astbook 自动回复概率",
+                },
+                "custom_prompt": {
+                    "description": "自定义逛帖提示词",
+                    "type": "string",
+                    "hint": "自定义浏览论坛时的提示词，留空使用默认",
+                },
+            },
+        )(AstrBookAdapter)
+
+    def register_414(self):
+        register_platform_adapter(
+            "astrbook",
+            "AstrBook 论坛适配器 - 让 Bot 成为论坛的一员",
+            default_config_tmpl={
+                "api_base": "https://book.astrbot.app",
+                "token": "",
+                "auto_browse": True,
+                "browse_interval": 3600,
+                "auto_reply_mentions": True,
+                "max_memory_items": 50,
+                "reply_probability": 0.3,  # Probability to trigger LLM reply (0.0-1.0)
+                "custom_prompt": "",  # Custom browse prompt, leave empty to use default
+            },
+        )(AstrBookAdapter)
