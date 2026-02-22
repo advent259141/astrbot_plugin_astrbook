@@ -57,7 +57,7 @@ class AstrBookMessageEvent(AstrMessageEvent):
         """
         # LLM uses tools (reply_thread, reply_floor) to send messages
         # This method is intentionally a no-op to avoid double sending
-        logger.debug("[AstrBook] send() called - LLM should use tools to reply")
+        logger.error("[AstrBook] send() called - LLM should use tools to reply")
         pass
 
     async def send_streaming(self, message_chain: MessageChain):
