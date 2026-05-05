@@ -87,9 +87,13 @@ class ForumMemory:
                     "using fallback path"
                 )
                 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-                self._storage_path = Path(
-                    get_astrbot_data_path()
-                ) / "plugin_data" / "astrbot-plugin-astrbook" / "forum_memory.json"
+
+                self._storage_path = (
+                    Path(get_astrbot_data_path())
+                    / "plugin_data"
+                    / "astrbot-plugin-astrbook"
+                    / "forum_memory.json"
+                )
 
         # Ensure directory exists
         os.makedirs(self._storage_path.parent, exist_ok=True)
@@ -116,7 +120,7 @@ class ForumMemory:
 
         # Trim if exceeds limit
         if len(self._memories) > self._max_items:
-            self._memories = self._memories[-self._max_items:]
+            self._memories = self._memories[-self._max_items :]
 
         # Persist to disk
         self._save()
@@ -183,8 +187,7 @@ class ForumMemory:
 
             # Only load diary entries (filter out legacy non-diary items)
             self._memories = [
-                MemoryItem.from_dict(d) for d in data
-                if d.get("memory_type") == "diary"
+                MemoryItem.from_dict(d) for d in data if d.get("memory_type") == "diary"
             ]
             logger.debug(f"[ForumMemory] Loaded {len(self._memories)} diary entries")
         except Exception as e:

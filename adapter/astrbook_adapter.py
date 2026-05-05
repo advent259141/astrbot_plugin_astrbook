@@ -14,7 +14,6 @@ from collections.abc import Coroutine
 from typing import Any
 
 import aiohttp
-
 from astrbot import logger
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain
@@ -157,7 +156,9 @@ ASTRBOOK_CONFIG_METADATA = {
 }
 
 try:
-    _REGISTER_ADAPTER_PARAM_NAMES = set(inspect.signature(register_platform_adapter).parameters)
+    _REGISTER_ADAPTER_PARAM_NAMES = set(
+        inspect.signature(register_platform_adapter).parameters
+    )
 except (TypeError, ValueError):
     _REGISTER_ADAPTER_PARAM_NAMES = set()
 SUPPORTS_ADAPTER_METADATA_ARGS = {
@@ -232,13 +233,127 @@ class AstrBookAdapter(Platform):
         session: MessageSesion,
         message_chain: MessageChain,
     ):
-        """Send message through session.
-        
-        Note: For AstrBook, LLM uses tools (reply_thread, reply_floor) to send messages.
-        This method is kept for compatibility but does nothing special.
+        """Send an active AstrBook message from a persisted session.
+
+        AstrBot's built-in send_message_to_user tool calls this method. AstrBook
+        sessions must encode a concrete target, otherwise a plain active message
+        could be delivered to the wrong forum destination.
         """
-        # LLM uses tools directly, no need to send via adapter
+        text = message_chain.get_plain_text().strip() if message_chain else ""
+        if not text:
+            logger.warning("[AstrBook] active send ignored: empty message")
+            return
+
+        target = self._parse_active_send_session(session.session_id)
+        if target is None:
+            logger.warning(
+                "[AstrBook] active send ignored: session has no concrete "
+                "AstrBook target, session_id=%s",
+                session.session_id,
+            )
+            return
+
+        kind, target_id = target
+        if kind == "dm_user":
+            ok = await self._post_active_message(
+                "/api/dm/messages",
+                {"content": text},
+                params={"target_user_id": target_id},
+            )
+        elif kind == "reply":
+            ok = await self._post_active_message(
+                f"/api/replies/{target_id}/sub_replies",
+                {"content": text},
+            )
+        elif kind == "thread":
+            ok = await self._post_active_message(
+                f"/api/threads/{target_id}/replies",
+                {"content": text},
+            )
+        else:
+            logger.warning(
+                "[AstrBook] active send ignored: unsupported target kind=%s",
+                kind,
+            )
+            return
+
+        if not ok:
+            return
+
+        logger.info(
+            "[AstrBook] active send delivered via send_by_session: kind=%s, target=%s",
+            kind,
+            target_id,
+        )
         await super().send_by_session(session, message_chain)
+
+    @staticmethod
+    def _parse_active_send_session(session_id: str) -> tuple[str, int] | None:
+        """Parse target-aware AstrBook session IDs used by send_by_session."""
+
+        prefixes = {
+            "astrbook_dm_user_": "dm_user",
+            "astrbook_reply_": "reply",
+            "astrbook_thread_": "thread",
+        }
+        for prefix, kind in prefixes.items():
+            if session_id.startswith(prefix):
+                raw_id = session_id.removeprefix(prefix)
+                if raw_id.isdigit():
+                    return kind, int(raw_id)
+                return None
+
+        if session_id.startswith("astrbook_dm_") and "_user_" in session_id:
+            raw_id = session_id.rsplit("_user_", 1)[1]
+            if raw_id.isdigit():
+                return "dm_user", int(raw_id)
+
+        return None
+
+    async def _post_active_message(
+        self,
+        endpoint: str,
+        data: dict,
+        params: dict | None = None,
+    ) -> bool:
+        if not self.token:
+            logger.warning("[AstrBook] active send failed: token not configured")
+            return False
+
+        url = f"{self.api_base}{endpoint}"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+            "Accept-Encoding": "gzip, deflate",
+        }
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=40)
+            ) as session:
+                async with session.post(
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=data,
+                ) as resp:
+                    if 200 <= resp.status < 300:
+                        return True
+                    text = await resp.text()
+                    logger.warning(
+                        "[AstrBook] active send failed: %s - %s",
+                        resp.status,
+                        text[:200] if text else "No response",
+                    )
+        except asyncio.TimeoutError:
+            logger.warning("[AstrBook] active send failed: timeout")
+        except aiohttp.ClientConnectorError:
+            logger.warning(
+                "[AstrBook] active send failed: cannot connect to %s",
+                self.api_base,
+            )
+        except Exception as e:
+            logger.warning("[AstrBook] active send failed: %s", e, exc_info=True)
+        return False
 
     def run(self) -> Coroutine[Any, Any, None]:
         """Main entry point for the adapter."""
@@ -332,7 +447,7 @@ class AstrBookAdapter(Platform):
 
     async def _sse_connect(self) -> bool:
         """Establish SSE connection.
-        
+
         Returns:
             bool: True if authentication failed (401), False otherwise.
         """
@@ -355,11 +470,15 @@ class AstrBookAdapter(Platform):
                 timeout=aiohttp.ClientTimeout(total=None, sock_read=None),
             ) as resp:
                 if resp.status == 401:
-                    logger.error("[AstrBook] SSE authentication failed: invalid or expired token")
+                    logger.error(
+                        "[AstrBook] SSE authentication failed: invalid or expired token"
+                    )
                     return True  # ✅ 返回认证失败标志
 
                 if resp.status != 200:
-                    logger.error(f"[AstrBook] SSE connection failed with status {resp.status}")
+                    logger.error(
+                        f"[AstrBook] SSE connection failed with status {resp.status}"
+                    )
                     return False
 
                 self._connected = True
@@ -383,19 +502,18 @@ class AstrBookAdapter(Platform):
             self._connected = False
             if not session.closed:
                 await session.close()
-        
+
         return False  # ✅ 连接正常断开（非认证失败）
 
     async def _parse_sse_block(self, block: str):
         """Parse a single SSE message block."""
         import json
 
-        event_type = None
         data_lines = []
 
         for line in block.split("\n"):
             if line.startswith("event: "):
-                event_type = line[7:].strip()
+                continue
             elif line.startswith("data: "):
                 data_lines.append(line[6:])
             elif line.startswith(":"):
@@ -487,7 +605,13 @@ class AstrBookAdapter(Platform):
             nickname=from_username,
         )
         abm.type = MessageType.FRIEND_MESSAGE
-        abm.session_id = "astrbook_browse_system"  # Use same session as browse
+        session_id = self._build_notification_session_id(
+            msg_type,
+            thread_id,
+            reply_id,
+        )
+
+        abm.session_id = session_id
         abm.message_id = str(reply_id or uuid.uuid4().hex)
         abm.message = [Plain(text=formatted_message)]
         abm.message_str = formatted_message
@@ -498,7 +622,7 @@ class AstrBookAdapter(Platform):
             message_str=formatted_message,
             message_obj=abm,
             platform_meta=self._metadata,
-            session_id="astrbook_browse_system",  # Use same session as browse
+            session_id=session_id,
             adapter=self,
             thread_id=thread_id,
             reply_id=reply_id,
@@ -565,8 +689,8 @@ class AstrBookAdapter(Platform):
         )
 
         session_id = (
-            f"astrbook_dm_{conversation_id}"
-            if conversation_id is not None
+            f"astrbook_dm_user_{sender_id}"
+            if sender_id is not None
             else "astrbook_dm_system"
         )
 
@@ -597,6 +721,10 @@ class AstrBookAdapter(Platform):
         event.set_extra("conversation_id", conversation_id)
         event.set_extra("dm_message_id", dm_message_id)
         event.set_extra("notification_type", "dm_new_message")
+        event.set_extra(
+            "plain_assistant_response_repair_prompt",
+            event._build_plain_response_repair_prompt(),
+        )
 
         if random.random() > self.reply_probability:
             logger.info(
@@ -613,9 +741,20 @@ class AstrBookAdapter(Platform):
             f"triggered LLM (probability={self.reply_probability:.0%})"
         )
 
+    @staticmethod
+    def _build_notification_session_id(
+        msg_type: str | None,
+        thread_id: int | None,
+        reply_id: int | None,
+    ) -> str:
+        if msg_type in {"reply", "sub_reply", "mention"} and reply_id is not None:
+            return f"astrbook_reply_{reply_id}"
+        if thread_id is not None:
+            return f"astrbook_thread_{thread_id}"
+        return "astrbook_browse_system"
+
     async def _handle_new_thread(self, data: dict):
         """Handle new thread notification (optional)."""
-        thread_id = data.get("thread_id")
         thread_title = data.get("thread_title", "")
         author = data.get("author", "unknown")
 
@@ -623,20 +762,43 @@ class AstrBookAdapter(Platform):
 
     async def _mark_notifications_read(self):
         """Mark all notifications as read via API."""
+        if not self.token:
+            logger.warning("[AstrBook] Token not configured, cannot mark read")
+            return
+
+        url = f"{self.api_base}/api/notifications/read-all"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+            "Accept-Encoding": "gzip, deflate",
+        }
         try:
-            url = f"{self.api_base}/api/notifications/read-all"
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=40)
+            ) as session:
+                async with session.post(url, headers=headers) as resp:
+                    if 200 <= resp.status < 300:
                         logger.debug("[AstrBook] Notifications marked as read")
-                    else:
-                        logger.warning(f"[AstrBook] Failed to mark notifications as read: {resp.status}")
+                        return
+                    text = await resp.text()
+                    logger.warning(
+                        "[AstrBook] Error marking notifications as read: %s - %s",
+                        resp.status,
+                        text[:200] if text else "No response",
+                    )
+        except asyncio.TimeoutError:
+            logger.warning("[AstrBook] Error marking notifications as read: timeout")
+        except aiohttp.ClientConnectorError:
+            logger.warning(
+                "[AstrBook] Error marking notifications as read: cannot connect to %s",
+                self.api_base,
+            )
         except Exception as e:
-            logger.warning(f"[AstrBook] Error marking notifications as read: {e}")
+            logger.warning(
+                "[AstrBook] Error marking notifications as read: %s",
+                e,
+                exc_info=True,
+            )
 
     # ==================== Auto Browse ====================
 
@@ -749,7 +911,7 @@ class AstrBookAdapter(Platform):
 
     def get_unified_msg_origin(self) -> str:
         """Get the unified_msg_origin string for the AstrBook adapter session.
-        
+
         Format: platform_id:FriendMessage:astrbook_browse_system
         """
         return f"{self._metadata.id}:FriendMessage:astrbook_browse_system"
